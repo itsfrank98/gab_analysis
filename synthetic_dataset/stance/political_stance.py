@@ -70,7 +70,7 @@ def compute_stance(client, df, affiliations_fname, model, affiliations=None):
 
 def plot_stance(affiliations):
     c = list(affiliations.values())
-    dc = {v: c.count(v) for v in ["far left", "left", "center", "non political", "right", "far right"]}     # list(set(c))
+    dc = {v: c.count(v) for v in ["far left", "left", "center", "non political", "right", "far right", "unknown"]}     # list(set(c))
     plt.bar(list(dc.keys()), list(dc.values()))
     plt.show()
 
