@@ -1,8 +1,7 @@
 import pickle
-
-import pandas as pd
-from openpyxl.styles import Font
-
+import matplotlib.pyplot as plt
+import numpy as np
+import json
 
 def save_to_pickle(name, c):
     with open(name, 'wb') as f:
@@ -13,44 +12,54 @@ def load_from_pickle(name):
     with open(name, 'rb') as f:
         return pickle.load(f)
 
+def plot_multiple_data(dicts, xlabels, legend, dst, type_plot="bar"):
+    """
+    Use this function for plotting multiple distributions
+    :param dicts: list of dictionaries containing the distributions to plot
+    :param xlabels: labels to put on the x-axis
+    :param legend: List of values to display in the legend
+    :param dst: destination file where the plot will be saved
+    :return:
+    """
+    width = 1/len(dicts)
+    dcs = []
+    x = np.arange(len(xlabels))
+    for el in dicts:
+        c = list(el.values())
+        dc = {v: c.count(v) for v in xlabels}
+        dcs.append(dc)
+    if type_plot == "line":
+        for i in range(len(dcs)):
+            plt.plot(x, list(dcs[i].values()), label=legend[i])
+    elif type_plot == "bar":
+        if len(dicts) == 2:
+            width = .35
+            plt.bar(x - width/2, list(dcs[0].values()), width, label=legend[0])
+            plt.bar(x + width/2, list(dcs[1].values()), width, label=legend[1])
+        elif len(dicts) == 3:
+            plt.bar(x - width, list(dcs[0].values()), width, label=legend[0])
+            plt.bar(x, list(dcs[1].values()), width, label=legend[1])
+            plt.bar(x + width, list(dcs[2].values()), width, label=legend[2])
+    plt.xticks(x, xlabels, rotation=45, ha='right')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("{}.pdf".format(dst))
+    plt.show()
 
-def create_dataframes(df, afl, model_name, dim, dst_dir):
-    for k in list(afl.keys()):
-        if k.__contains__("duplicate"):
-            afl.pop(k)
-    far_left = [int(k) for k in list(afl.keys()) if afl[k] == "far left"]
-    left = [int(k) for k in list(afl.keys()) if afl[k] == "left"]
-    center = [int(k) for k in list(afl.keys()) if afl[k] == "center"]
-    right = [int(k) for k in list(afl.keys()) if afl[k] == "right"]
-    far_right = [int(k) for k in list(afl.keys()) if afl[k] == "far right"]
-    unknown = None
-    if "unknown" in list(afl.keys()):
-        unknown = [int(k) for k in list(afl.keys()) if afl[k] == "unknown"]
-    apolitical = [int(k) for k in list(afl.keys()) if afl[k] == "non political"]
 
-    df = df.drop(columns=[k for k in df.columns if k not in ["account_id", "posts_count", "content"]])
-    df_far_left = df[df.account_id.isin(far_left)]
-    df_left = df[df.account_id.isin(left)]
-    df_center = df[df.account_id.isin(center)]
-    df_right = df[df.account_id.isin(right)]
-    df_far_right = df[df.account_id.isin(far_right)]
-    if unknown:
-        df_unknown = df[df.account_id.isin(unknown)]
-    df_apolitical = df[df.account_id.isin(apolitical)]
+if __name__ == "__main__":
+    type_plot = "line"
+    xlabels = ["far left", "left", "center", "right", "far right", "non political", "unknown"]
+    dst = "synthetic_dataset/stance/plots/comparison_mistral_1500_{}".format(type_plot)
+    legend = ["P1", "P2"]
 
-    with pd.ExcelWriter(f"{dst_dir}/{model_name}_{dim}.xlsx") as writer:
-        df_far_left.to_excel(writer, sheet_name="far_left")
-        df_left.to_excel(writer, sheet_name="left")
-        df_center.to_excel(writer, sheet_name="center")
-        df_right.to_excel(writer, sheet_name="right")
-        df_far_right.to_excel(writer, sheet_name="far_right")
-        if unknown:
-            df_unknown.to_excel(writer, sheet_name="can't decide")
-        df_apolitical.to_excel(writer, sheet_name="apolitical")
+    with open("synthetic_dataset/stance/affiliation_dicts/mistral_no_american_politics/affiliations_1500_mistral.json", 'r') as f:
+        d_1 = json.load(f)
+    with open("synthetic_dataset/stance/affiliation_dicts/affiliations_1500_mistral_newlabel.json", 'r') as f:
+        d_2 = json.load(f)
+    with open("synthetic_dataset/stance/affiliation_dicts/affiliations_4000_local-model_newlabel.json", 'r') as f:
+        d_llama = json.load(f)
 
-        for sheet in writer.sheets:
-            worksheet = writer.sheets[sheet]
-            # Set font size for all cells
-            for row in worksheet.iter_rows():
-                for cell in row:
-                    cell.font = Font(size=14)
+    dicts = [d_1, d_2]
+
+    plot_multiple_data(dicts, xlabels=xlabels, legend=legend, dst=dst, type_plot=type_plot)

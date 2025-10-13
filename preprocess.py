@@ -63,10 +63,10 @@ def concat(l: pd.Series):
 
 def concatenate_by_user(df, aggregator_column, text_column):
     ser = df.groupby(aggregator_column)[text_column].apply(concat)
-    df = pd.DataFrame(columns=[aggregator_column, text_column])
-    df[aggregator_column] = ser.index
-    df[text_column] = ser.values
-    return df
+    new_df = pd.DataFrame(columns=[aggregator_column, text_column])
+    new_df[aggregator_column] = ser.index
+    new_df[text_column] = ser.values
+    return new_df
 
 
 def main():
