@@ -37,6 +37,7 @@ def plot_multiple_data(dicts, xlabels, legend, dst, type_plot="bar"):
             plt.bar(x - width/2, list(dcs[0].values()), width, label=legend[0])
             plt.bar(x + width/2, list(dcs[1].values()), width, label=legend[1])
         elif len(dicts) == 3:
+            width = .2
             plt.bar(x - width, list(dcs[0].values()), width, label=legend[0])
             plt.bar(x, list(dcs[1].values()), width, label=legend[1])
             plt.bar(x + width, list(dcs[2].values()), width, label=legend[2])
@@ -49,17 +50,18 @@ def plot_multiple_data(dicts, xlabels, legend, dst, type_plot="bar"):
 
 if __name__ == "__main__":
     type_plot = "line"
-    xlabels = ["far left", "left", "center", "right", "far right", "non political", "unknown"]
-    dst = "synthetic_dataset/stance/plots/comparison_mistral_1500_{}".format(type_plot)
-    legend = ["P1", "P2"]
+    dim = 1500
+    xlabels = ["far-left", "left", "center", "right", "far-right", "non_political", "unknown"]
+    dst = "synthetic_dataset/stance/plots/comparison_{}_{}".format(dim, type_plot)
+    legend = ["Mistral", "GPT", "Llama"]
 
-    with open("synthetic_dataset/stance/affiliation_dicts/mistral_no_american_politics/affiliations_1500_mistral.json", 'r') as f:
+    with open("synthetic_dataset/stance/affiliation_dicts/affiliations_{}_mistral.json".format(dim), 'r') as f:
         d_1 = json.load(f)
-    with open("synthetic_dataset/stance/affiliation_dicts/affiliations_1500_mistral_newlabel.json", 'r') as f:
+    with open("synthetic_dataset/stance/affiliation_dicts/affiliations_gpt_{}.json".format(dim), 'r') as f:
         d_2 = json.load(f)
-    with open("synthetic_dataset/stance/affiliation_dicts/affiliations_4000_local-model_newlabel.json", 'r') as f:
+    with open("synthetic_dataset/stance/affiliation_dicts/affiliations_llama_{}.json".format(dim), 'r') as f:
         d_llama = json.load(f)
 
-    dicts = [d_1, d_2]
+    dicts = [d_1, d_2, d_llama]
 
     plot_multiple_data(dicts, xlabels=xlabels, legend=legend, dst=dst, type_plot=type_plot)
