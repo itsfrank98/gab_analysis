@@ -62,7 +62,7 @@ def plot_confusion_matrix(y_true, y_pred, model):
 
     plt.xticks(rotation=90)
     plt.yticks(rotation=0)
-
+    plt.tight_layout()
     os.makedirs("matrices", exist_ok=True)
     plt.savefig(f"matrices/matrix_{model}.png")
     plt.show()
