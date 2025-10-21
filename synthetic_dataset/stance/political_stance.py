@@ -9,13 +9,14 @@ from mistralai import Mistral
 from mistralai.models.sdkerror import SDKError
 from openai import OpenAI, RateLimitError
 from stance_utils import *
+from numpy import array
 
 
 API_KEY_MISTRAL = "DodgOOtH2qzN13X0xowpPQZqTE1glFI2"
 
-def compute_stance(client, df, affiliations_fname, model, political_leanings, affiliations=None):
+def compute_stance(client, df, affiliations_fname, model, political_leanings, id_column, affiliations=None):
     if affiliations:
-        df = df[~df.account_id.astype(str).isin(list(affiliations.keys()))]
+        df = df[~df[id_column].astype(str).isin(list(affiliations.keys()))]
     else:
         affiliations = {}
 
@@ -27,12 +28,13 @@ def compute_stance(client, df, affiliations_fname, model, political_leanings, af
     while i < len(df):
         print(i)
         sub_df = df.loc[i:i + step-1]
-        dictionary = {r['account_id']: r['content'] for _, r in sub_df.iterrows()}
+        dictionary = {r[id_column]: r['content'] for _, r in sub_df.iterrows()}
         content = ("Instruction: I will now give you a dictionary. The keys represent IDs, and the values are "
                    "texts associated to each ID. I need you to look at each text and tell if its political "
-                   f"leaning is {political_leaning_str}. Classify the texts considering the american political point"
-                   "of view. If you can't decide a label, mark it as 'unknown'. Assign each text exactly one leaning.\n"    # If the content is not about politics, mark it as 'non_political'.
-                   "OUTPUT INSTRUCTION: Return the answer in form of a json dictionary where the keys are the same"
+                   f"leaning is {political_leaning_str}. Classify the texts considering the american political point "
+                   "of view. If you can't decide a label, mark it as 'unknown'. If the content is not about politics, "
+                   "mark it as 'non_political'. Assign each text exactly one leaning.\n"
+                   "OUTPUT INSTRUCTION: Return the answer in form of a json dictionary where the keys are the same "
                    "of the dictionary I provide, and the values are the labels associated to the text. "
                    "Don't write anything else."
                    f"Input dictionary: {dictionary}")
@@ -40,7 +42,8 @@ def compute_stance(client, df, affiliations_fname, model, political_leanings, af
             if model == "local-model":
                 response = client.chat.completions.create(
                     model=model,
-                    messages=[{"role": "user", "content": content}]
+                    messages=[{"role": "user", "content": content}],
+                    temperature=0.8
                 )
                 answer = response.choices[0].message.content
             else:
@@ -75,7 +78,22 @@ def compute_stance(client, df, affiliations_fname, model, political_leanings, af
 def plot_stance(affiliations, political_leanings, model):
     c = list(affiliations.values())
     dc = {v: c.count(v) for v in political_leanings}     # list(set(c))
-    plt.bar(list(dc.keys()), list(dc.values()))
+    lc = array(list(dc.values()))
+    total = sum(lc)
+    percentages = lc/total * 100
+
+    fig, ax = plt.subplots()
+    bars = ax.bar(list(dc.keys()), list(dc.values()))
+    #plt.bar(list(dc.keys()), list(dc.values()))
+    for bar, pct in zip(bars, percentages):
+        height = bar.get_height()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,  # x position
+            height,  # y position (top of bar)
+            f'{pct:.1f}%',  # formatted percentage
+            ha='center', va='bottom', fontsize=10, fontweight='bold'
+        )
+
     plt.xticks(rotation=45, ha='right')
     os.makedirs('plots', exist_ok=True)
     plt.tight_layout()
@@ -83,11 +101,11 @@ def plot_stance(affiliations, political_leanings, model):
     plt.show()
 
 
-def main(model, dim, affiliations_fname, sampled_fname, dataframe_dst_dir=None, compute_stance_flag=False,
-         perform_test=False):
-    # political_leanings = ["far-left", "left", "center", "right", "far-right"]
-    political_leanings = ['panafricanist', 'conservative', 'centrist', 'member_of_ISIS', 'far-right', 'republican', 'liberal', 'far-left']
-
+def main(model, dim, affiliations_fname, sampled_fname, id_column, real_affiliations_path=None, dataframe_dst_dir=None,
+         compute_stance_flag=False):
+    political_leanings = ["far_left", "left", "center", "right", "far_right"]
+    #political_leanings = ['neo_nazi', 'member_of_national_socialist_network', 'far_left', 'conservative', 'far_right', 'feminist', 'member_of_isis', 'white_supremacist', 'radical_zionist', 'black_supremacist', 'radical_feminist', 'radical_feminism', 'republican', 'liberal', 'eco_terrorism', 'liberal_middle_left', 'panafricanist', 'conservative_middle_right', 'anti_feminist', 'centrist', 'conservative (middle-right), feminist']
+    # mistral-large-latest
     if model == "local-model":
         base_url = "http://127.0.0.1:1234/v1"
         client = OpenAI(base_url=base_url, api_key="foo")
@@ -109,29 +127,53 @@ def main(model, dim, affiliations_fname, sampled_fname, dataframe_dst_dir=None, 
             affiliations = json.load(f)
     if compute_stance_flag:
         affiliations = compute_stance(client=client, df=sampled, affiliations_fname=affiliations_fname, model=model,
-                                      affiliations=affiliations, political_leanings=political_leanings)
+                                      affiliations=affiliations, political_leanings=political_leanings, id_column=id_column)
 
-    plot_stance(affiliations, political_leanings + ["unknown", "non-political"], model)
+    plot_stance(affiliations, political_leanings + ["unknown", "non_political"], model)  # , "non-political"
+    #plot_stance(affiliations, political_leanings + ["unknown"], model)
     if dataframe_dst_dir:
         os.makedirs(dataframe_dst_dir, exist_ok=True)
-        create_dataframes(df=sampled, afl=affiliations, model_name=model, dim=dim, dst_dir=dataframe_dst_dir)
-    if perform_test:
-        real_afl_df = pd.read_csv("counter/counter_affiliations_broader.csv")
+        create_dataframes(df=sampled, afl=affiliations, leanings=political_leanings + ["unknown", "non_political"],  #, "non-political"
+                          model_name=model, dim=dim, dst_dir=dataframe_dst_dir, id_field=id_column)
+    if real_affiliations_path:
+        real_afl_df = pd.read_csv(real_affiliations_path)
         real_afl = real_afl_df["political_view"].tolist()
         predicted_afl = list(affiliations.values())
         plot_confusion_matrix(y_true=real_afl, y_pred=predicted_afl, model=model)
 
 
 if __name__ == "__main__":
+    #"""
     parser = ArgumentParser()
     parser.add_argument("--model", default="local-model")
     parser.add_argument("--dim", required=False, default=0)
     parser.add_argument("--affiliations_fname", default="affiliations.json")
-    parser.add_argument("--sampled_fname", default="sampled_for_stance_4000.csv", required=True)
+    parser.add_argument("--content_fname", default="sampled_for_stance_4000.csv", required=True)
     parser.add_argument("--compute_stance", action="store_true")
     parser.add_argument("--perform_test", action="store_true")
     parser.add_argument("--dataframe_dst_dir", required=False)
+    parser.add_argument("--real_affiliations_path", required=False, default=None)
+    parser.add_argument("--id_column", required=False, default="account_id")
     args = parser.parse_args()
-    main(model=args.model, dim=args.dim, affiliations_fname=args.affiliations_fname, sampled_fname=args.sampled_fname,
-         compute_stance_flag=args.compute_stance, dataframe_dst_dir=args.dataframe_dst_dir, perform_test=args.perform_test)
+
+    main(model=args.model, dim=args.dim, affiliations_fname=args.affiliations_fname, sampled_fname=args.content_fname,
+         compute_stance_flag=args.compute_stance, dataframe_dst_dir=args.dataframe_dst_dir,
+         real_affiliations_path=args.real_affiliations_path, id_column=args.id_column)
+    #"""
+
+    """
+    args = {
+        "model": "local-model",
+        "dim": 10,
+        "affiliations_fname": "counter/affiliations_llama_coarse.json",
+        "sampled_fname": "counter/counter_concatenated.csv",
+        "compute_stance": False,
+        "perform_test": True,
+        "dataframe_dst_dir": "dataframes_counter",
+        "real_affiliations_path": ""
+    }
+    main(model=args["model"], dim=args["dim"], affiliations_fname=args["affiliations_fname"], sampled_fname=args["sampled_fname"],
+         compute_stance_flag=args["compute_stance"], dataframe_dst_dir=args["dataframe_dst_dir"],
+         real_affiliations_path=args["real_affiliations_path"])
+    """
     #affiliations_fname = f"affiliations_{dim}_{model}_newlabel.json"     #_newlabel

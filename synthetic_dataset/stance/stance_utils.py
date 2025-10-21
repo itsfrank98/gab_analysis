@@ -6,39 +6,26 @@ import seaborn as sn
 from openpyxl.styles import Font
 from sklearn.metrics import precision_recall_fscore_support, confusion_matrix
 
-def create_dataframes(df, afl, model_name, dim, dst_dir):
+
+def create_dataframes(df, afl, leanings, model_name, dim, dst_dir, id_field="account_id"):
     for k in list(afl.keys()):
         if k.__contains__("duplicate"):
             afl.pop(k)
-    far_left = [int(k) for k in list(afl.keys()) if afl[k] == "far left"]
-    left = [int(k) for k in list(afl.keys()) if afl[k] == "left"]
-    center = [int(k) for k in list(afl.keys()) if afl[k] == "center"]
-    right = [int(k) for k in list(afl.keys()) if afl[k] == "right"]
-    far_right = [int(k) for k in list(afl.keys()) if afl[k] == "far right"]
-    unknown = None
-    if "unknown" in list(afl.keys()):
-        unknown = [int(k) for k in list(afl.keys()) if afl[k] == "unknown"]
-    apolitical = [int(k) for k in list(afl.keys()) if afl[k] == "non political"]
+    lean_posts = []
+    list_of_dfs = []
+    for lean in leanings:
+        users_belonging_to_lean = [k for k in list(afl.keys()) if afl[k] == lean]
+        lean_posts.append((lean, users_belonging_to_lean))
 
-    df = df.drop(columns=[k for k in df.columns if k not in ["account_id", "posts_count", "content"]])
-    df_far_left = df[df.account_id.isin(far_left)]
-    df_left = df[df.account_id.isin(left)]
-    df_center = df[df.account_id.isin(center)]
-    df_right = df[df.account_id.isin(right)]
-    df_far_right = df[df.account_id.isin(far_right)]
-    if unknown:
-        df_unknown = df[df.account_id.isin(unknown)]
-    df_apolitical = df[df.account_id.isin(apolitical)]
+    df = df.drop(columns=[k for k in df.columns if k not in [id_field, "posts_count", "content"]])
+    df[id_field] = df[id_field].astype(str)
+    for lean, x in lean_posts:
+        df_lean = df[df[id_field].isin(x)]
+        list_of_dfs.append((lean, df_lean))
 
     with pd.ExcelWriter(f"{dst_dir}/{model_name}_{dim}.xlsx") as writer:
-        df_far_left.to_excel(writer, sheet_name="far_left")
-        df_left.to_excel(writer, sheet_name="left")
-        df_center.to_excel(writer, sheet_name="center")
-        df_right.to_excel(writer, sheet_name="right")
-        df_far_right.to_excel(writer, sheet_name="far_right")
-        if unknown:
-            df_unknown.to_excel(writer, sheet_name="can't decide")
-        df_apolitical.to_excel(writer, sheet_name="apolitical")
+        for lean, d in list_of_dfs:
+            d.to_excel(writer, sheet_name=lean, index=False)
 
         for sheet in writer.sheets:
             worksheet = writer.sheets[sheet]
