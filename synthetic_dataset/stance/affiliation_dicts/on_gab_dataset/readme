@@ -1,0 +1,5 @@
+This directory contains the affiliation dictionaries estimated by the three LLMs on the subsamples of the gab.com
+dataset. The directory "no_american_politics" contains the same dictionaries, obtained with a prompt where the LLMs
+were not told to consider the american political point of view
+
+affiliations_mistral_complete.json is the union of affiliations_1500 and affiliations_4000.
