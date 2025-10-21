@@ -24,19 +24,16 @@ for i in tqdm(range(100)):
         notes_list = sampled_df["note"].to_list()
         prompt = ("I will now provide you a list of 100 profile bios found online. Please, look at them and write 10 bios "
                   "that follow a similar style, tone and opinions expressed in these bios.\n"
-                  f"{notes_list}")
+                  f"{notes_list}"
+                  f"\nOUTPUT INSTRUCTIONS: \n"
+                    "* Return the bios in list format. Don't write anything else. The output should "
+                    "have the following structure: {\"bio1\": \"...\", \"bio2\": ..., \"bio3\": ..., "
+                    "\"bio4\": ..., \"bio5\": ..., \"bio6\": ..., \"bio7\": ..., \"bio8\": ..., "
+                    "\"bio9\": ..., \"bio10\": ...}")
         try:
             resp = client.chat.completions.create(
                 model="local-model",
-                messages=[
-                    #{"role": "system", "content": prompt},
-                    {"role": "user", "content": f"{prompt}"
-                                                "\nOUTPUT INSTRUCTIONS: \n"
-                                                "* Return the bios in list format. Don't write anything else. The output should "
-                                                "have the following structure: {\"bio1\": \"...\", \"bio2\": ..., \"bio3\": ..., "
-                                                "\"bio4\": ..., \"bio5\": ..., \"bio6\": ..., \"bio7\": ..., \"bio8\": ..., "
-                                                "\"bio9\": ..., \"bio10\": ...}"}
-                ],
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0.9
             )
         except BadRequestError as e:
