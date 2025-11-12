@@ -14,21 +14,20 @@ from numpy import array
 
 API_KEY_MISTRAL = "DodgOOtH2qzN13X0xowpPQZqTE1glFI2"
 
-def compute_stance(client, df, affiliations_fname, model, political_leanings, id_column, affiliations=None):
+def compute_stance(client, sampled_dict, affiliations_fname, model, political_leanings, id_column, affiliations=None):
     if affiliations:
-        df = df[~df[id_column].astype(str).isin(list(affiliations.keys()))]
+        for el in list(affiliations.keys()):
+            sampled_dict.pop(el)
     else:
         affiliations = {}
 
     i = 0
-    step = 10
-    #df = df.drop(columns=[c for c in df.columns if c not in ["account_id", "posts_count", "content"]])
-    df = df.reset_index()
+    step = 100
     political_leaning_str = ", ".join(political_leanings)
-    while i < len(df):
+
+    while i < len(sampled_dict):
         print(i)
-        sub_df = df.loc[i:i + step-1]
-        dictionary = {r[id_column]: r['content'] for _, r in sub_df.iterrows()}
+        sub_dict = dict(list(sampled_dict.items())[i:i+step])
         content = ("Instruction: I will now give you a dictionary. The keys represent IDs, and the values are "
                    "texts associated to each ID. I need you to look at each text and tell if its political "
                    f"leaning is {political_leaning_str}. Classify the texts considering the american political point "
@@ -37,7 +36,7 @@ def compute_stance(client, df, affiliations_fname, model, political_leanings, id
                    "OUTPUT INSTRUCTION: Return the answer in form of a json dictionary where the keys are the same "
                    "of the dictionary I provide, and the values are the labels associated to the text. "
                    "Don't write anything else."
-                   f"Input dictionary: {dictionary}")
+                   f"Input dictionary: {sub_dict}")
         try:
             if model == "local-model":
                 response = client.chat.completions.create(
@@ -115,18 +114,30 @@ def main(model, dim, affiliations_fname, sampled_fname, id_column, real_affiliat
     affiliations = None
 
     if not os.path.exists(sampled_fname):
-        df = pd.read_csv("../../dataset/posts_processed_stopwords_without_sampled.csv")  # posts_processed_stopwords.csv
-        df = df[df.content.str.split().str.len().between(40, 1000)]
-        sampled = df.sample(dim)
-        sampled = sampled.reset_index()
-        sampled.to_csv(sampled_fname)
-    sampled = pd.read_csv(sampled_fname)
+        if sampled_fname.endswith(".csv"):
+            df = pd.read_csv("../../dataset/posts_processed_stopwords_without_sampled.csv")  # posts_processed_stopwords.csv
+            df = df[df.content.str.split().str.len().between(40, 1000)]
+            sampled = df.sample(dim)
+            sampled = sampled.reset_index()
+            sampled.to_csv(sampled_fname)
 
     if os.path.exists(affiliations_fname):
         with open(affiliations_fname, 'r') as f:
             affiliations = json.load(f)
+
+    if sampled_fname.endswith(".csv"):
+        df = pd.read_csv(sampled_fname)
+        sampled_dict = {r[id_column]: r['content'] for _, r in df.iterrows()}
+    elif sampled_fname.endswith(".json"):
+        with open(sampled_fname, 'r') as f:
+            sampled = json.load(f)
+            if type(sampled) == dict:
+                sampled_dict = sampled
+            elif type(sampled) == list:
+                sampled_dict = {i: sampled[i] for i in range(len(sampled))}
+
     if compute_stance_flag:
-        affiliations = compute_stance(client=client, df=sampled, affiliations_fname=affiliations_fname, model=model,
+        affiliations = compute_stance(client=client, sampled_dict=sampled_dict, affiliations_fname=affiliations_fname, model=model,
                                       affiliations=affiliations, political_leanings=political_leanings, id_column=id_column)
 
     plot_stance(affiliations, political_leanings + ["unknown", "non_political"], model)  # , "non-political"
@@ -147,7 +158,8 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--model", default="local-model")
     parser.add_argument("--dim", required=False, default=0)
-    parser.add_argument("--affiliations_fname", default="affiliations.json")
+    parser.add_argument("--affiliations_fname", default="affiliations.json", help="Name of the file "
+                                                                      "containing the text. Can be a json or a csv")
     parser.add_argument("--content_fname", default="sampled_for_stance_4000.csv", required=True)
     parser.add_argument("--compute_stance", action="store_true")
     parser.add_argument("--perform_test", action="store_true")
@@ -177,3 +189,5 @@ if __name__ == "__main__":
          real_affiliations_path=args["real_affiliations_path"])
     """
     #affiliations_fname = f"affiliations_{dim}_{model}_newlabel.json"     #_newlabel
+
+    #python .\political_stance.py --model mistral-large-latest --affiliations_fname ..\hateful_bios\afl.json --content_fname ..\hateful_bios\hateful_bios.json --compute_stance

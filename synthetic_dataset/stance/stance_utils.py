@@ -1,10 +1,10 @@
 import os
-
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sn
 from openpyxl.styles import Font
 from sklearn.metrics import precision_recall_fscore_support, confusion_matrix
+from numpy import array
 
 
 def create_dataframes(df, afl, leanings, model_name, dim, dst_dir, id_field="account_id"):
