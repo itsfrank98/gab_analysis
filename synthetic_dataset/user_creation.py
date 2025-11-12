@@ -103,7 +103,6 @@ def main(user_n_posts=10, n_of_users=5, output_fname="synthetic_users", src_path
     dicts_list = []
 
     if not src_path:
-        radicalization_levels = np.arange(0, 11) * 10
         ages = np.arange(16, 61)
 
         political_items = list(political_leanings.keys())
@@ -114,11 +113,11 @@ def main(user_n_posts=10, n_of_users=5, output_fname="synthetic_users", src_path
 
         with open(usernames_path, "r") as f:
             usernames = json.load(f)
-        with open(bios_path, "r") as f:
+        with open(bios_path, "r", encoding="utf-8") as f:
             bios = json.load(f)
             if type(bios) == list:
                 bios = {str(k): bios[k] for k in range(len(bios))}
-        with open(bios_afl_path, "r") as f:
+        with open(bios_afl_path, "r", encoding="utf-8") as f:
             bios_affiliations = json.load(f)
 
         # These lists have a precise goal. When we generate a user, we first pick his leaning, sampling from the distribution.
@@ -128,10 +127,10 @@ def main(user_n_posts=10, n_of_users=5, output_fname="synthetic_users", src_path
         # other hand, if the leaning is unknown or non-political, we don't want the bio to express (far) right/left views.
         # In this way we generate less profiles that don't make sense
 
-        right_bios_keys = [k for k in list(bios_affiliations.keys()) if bios_affiliations[k] in ["right", "far-right"]]
-        left_bios_keys = [k for k in list(bios_affiliations.keys()) if bios_affiliations[k] in ["left", "far-left"]]
+        right_bios_keys = [k for k in list(bios_affiliations.keys()) if bios_affiliations[k] in ["right", "far_right"]]
+        left_bios_keys = [k for k in list(bios_affiliations.keys()) if bios_affiliations[k] in ["left", "far_left"]]
         any_bios_keys = [k for k in list(bios_affiliations.keys()) if
-                         bios_affiliations[k] in ["unknown", "non-political"]]
+                         bios_affiliations[k] in ["unknown", "non_political"]]
 
         bios_keys_for_right = right_bios_keys + any_bios_keys
         bios_keys_for_left = left_bios_keys + any_bios_keys
@@ -212,7 +211,7 @@ def main(user_n_posts=10, n_of_users=5, output_fname="synthetic_users", src_path
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create synthetic users probabilities")
-    parser.add_argument("--user_n_posts", type=int, help="Number of posts to create for each user")
+    parser.add_argument("--user_n_posts", type=int, required=False, help="Number of posts to create for each user")
     parser.add_argument("--n_of_users", type=int, required=False, help="Number of users to create")
     parser.add_argument("--src_path", type=str, default=None, help="Path to the csv file containing the "
                                                        "users' profiles from which the posts will be created")
