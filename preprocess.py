@@ -29,7 +29,13 @@ def preprocess_content(df, content_field: str, rm_punctuation=True, rm_stopwords
     dicts = []
     for i, r in tqdm(df.iterrows()):
         text_unprocessed = r[content_field]
-        soup = BeautifulSoup(text_unprocessed, 'html.parser')
+        try:
+            soup = BeautifulSoup(text_unprocessed, 'html.parser')
+        except TypeError:
+            print(i)
+            print(r["account_id"])
+            print(r["content"])
+            print("\n")
         # Remove the html tags
         text = soup.get_text().lower()
 
@@ -43,7 +49,7 @@ def preprocess_content(df, content_field: str, rm_punctuation=True, rm_stopwords
         splitted = [w for w in splitted if not any(w.__contains__(c) for c in ["^", "http", "www", "$"])]
         if rm_stopwords:
             splitted = [w for w in splitted if w not in stopwords.words("english")]
-        cleaned_text = " ".join(splitted)   # this also removes multiple whitespaces
+        cleaned_text = " ".join(splitted)
 
         r_d = dict(r)
         r_d[content_field] = cleaned_text
@@ -52,7 +58,7 @@ def preprocess_content(df, content_field: str, rm_punctuation=True, rm_stopwords
     preprocessed_df[content_field] = preprocessed_df[content_field].apply(normalize_text)
     if "Unnamed: 0" in preprocessed_df.columns:
         preprocessed_df = preprocessed_df.drop(columns=["Unnamed: 0"])
-
+    preprocessed_df[content_field] = preprocessed_df[content_field].replace(r'\s+', ' ', regex=True).str.strip()
     return preprocessed_df
 
 
@@ -90,6 +96,7 @@ def main():
         df = pd.read_csv(input_fname)
     else:
         df = pd.read_hdf(input_fname, key="df")
+
     preprocessed = preprocess_content(df, content_field=content_field, rm_punctuation=rm_punctuation, rm_stopwords=rm_stopwords)
     if concat_by:
         preprocessed = concatenate_by_user(preprocessed, aggregator_column=concat_by, text_column=content_field)
