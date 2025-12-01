@@ -101,7 +101,7 @@ def main():
     if concat_by:
         preprocessed = concatenate_by_user(preprocessed, aggregator_column=concat_by, text_column=content_field)
 
-    preprocessed.to_csv(output_fname)
+    preprocessed.to_csv(output_fname, encoding="utf-8")
 
 
 if __name__ == "__main__":
