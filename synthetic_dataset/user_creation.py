@@ -19,7 +19,7 @@ client = OpenAI(
 )
 
 def create_user(user_id, user_n_posts, j, user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
-                user_interests, age, job, create_posts=True):
+                user_interests, age_interval, job, create_posts=True):
     d = {
         "profile_id": user_id.format(j),
         "username": user_name,
@@ -31,61 +31,49 @@ def create_user(user_id, user_n_posts, j, user_name, user_bio, state_of_origin, 
         "religion": religion,
         "political_leaning": political_view.replace("_", "-"),
         "interests": user_interests,
-        "age": age,
+        "age_interval": age_interval,
         "profession": job,
-        # "radicalization_level": f"{user_rad_level}/100"
     }
 
     if create_posts:
-        prompt = f"Take this profile description in dictionary format: {d}"
-        """
-        "{\n"
-        f"username: '{user_name}',\n"
-        f"user_bio: '{user_bio}',\n"
-        f"nationality: 'american',\n"
-        f"state_of_origin: {state_of_origin},\n"
-        f"gender: '{gender},'\n"
-        f"political_leaning: '{political_view}',\n"
-        f"interests: '{user_interests}',\n"
-        f"age: '{age}',\n"
-        f"radicalization_level: '{user_rad_level}/100',\n"
-        f"language_register: '{user_register}',\n"
-        f"profession: '{job}'"
-        "}\n"
-        """
-
-        sampled_probability = np.random.choice(np.arange(.1, 1, .1))
-        d["probability"] = sampled_probability
+        prompt = (f"Take this profile description in dictionary format: {d}. Generate n={user_n_posts} social media "
+                  f"posts that {user_name} would write on gab.com. It is a loosely moderated social media platform where "
+                  f"people can freely express their feelings without risking to be banned. "
+                  f"The posts can include strong, unfiltered opinions, inflammatory language, or even hate speech or "
+                  f"incitement to violence if it fits the user's persona. The users' posts should not be "
+                  f"monothematic, and must cover a large range of topics, coherent with the person's passions "
+                  f"and opinions. \n"
+                  f"OUTPUT INSTRUCTIONS: \n"
+                  "* Write only textual posts, without multimedia content;\n"
+                  "* The output for  should be a list of posts in plain text. Feel free to use hashtags or emojis."
+                  "Use them in different parts of the post.\n"
+                  "Return the posts in JSON format. Don't write anything else. The output should have the following "
+                  "structure: {\"response\": [\"post1\", \"post2\", ..., \"post_n\"]}"
+                  )
         resp = client.chat.completions.create(
             model="local-model",
             messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user",
-                 "content": f"Generate n={user_n_posts} social media posts that {user_name} would write on "
-                            f"gab.com. Gab.com is a social media platform that allows "
-                            f"people to freely express their feelings without risking of being banned. \n"
-                            "In the posts, the user can discuss about his/her passions, express "
-                            "feelings about society, politics and religion. Please sample from the tail of the distribution "
-                            f"such that the probability of each post is less than or equal to 0.4. You can use offensive and insulting slurs, but not too many times.\n \n"
-                            f"OUTPUT INSTRUCTIONS: \n"
-                            "* Write only textual posts, without multimedia content."
-                            "* The output should be a list of posts in plain text. Feel free to use "
-                            "hashtags or emojis. Use them in different parts of the post.\n"
-                            f"Return the posts in JSON format. Don't write anything else. The output should "
-                            "have the following structure: {\"response\": [\"post1\", \"post2\", ..., \"post_n\"]}"}
+                {"role": "user", "content": prompt},
             ],
-            temperature=1.0
+            temperature=1.2,
+            top_p=0.9,
+            presence_penalty=0.8,
+            frequency_penalty=0.4
         )
 
         user_posts = resp.choices[0].message.content
         try:
             d["posts"] = json.loads(user_posts)["response"]
-
         except json.decoder.JSONDecodeError:
-            print("JSON error goddammit")
-            with open(f"{user_name}.txt", "w", encoding="utf-8") as f:
-                f.write(user_posts)
-            d["posts"] = [""] * 10
+            try:
+                lines = user_posts.strip().split('\n')
+                json_str = '\n'.join(lines[1:-1])
+                d["posts"] = json.loads(json_str)["response"]
+            except json.decoder.JSONDecodeError:
+                print("ERROR")
+                with open(f"{user_name}.txt", "w", encoding="utf-8") as f:
+                    f.write(user_posts)
+                d["posts"] = [""] * 10
     return d
 
 def determine_gender(user_bio):
@@ -97,11 +85,11 @@ def determine_gender(user_bio):
             return "male"
     return np.random.choice(["female", "male"])
 
-def main(user_n_posts=10, n_of_users=5, output_fname="synthetic_users", src_path=None, create_posts=True,
+def main(output_fname, directory, user_n_posts=10, n_of_users=5, src_path=None, create_posts=True,
          bios_path="bios/bios_united.json", bios_afl_path="bios/afl.json", usernames_path="usernames.json"):
     user_id = "p{}"
     dicts_list = []
-
+    os.makedirs(directory, exist_ok=True)
     if not src_path:
         ages = np.arange(16, 61)
 
@@ -185,20 +173,21 @@ def main(user_n_posts=10, n_of_users=5, output_fname="synthetic_users", src_path
             #post_length_instruction = "\n ".join(post_length_instruction)
 
             d = create_user(user_id=user_id, user_name=user_name, user_bio=user_bio, state_of_origin=state_of_origin,
-                            gender=gender, ethnicity=ethnicity, political_view=political_view, job=job, j=j, age=age,
+                            gender=gender, ethnicity=ethnicity, political_view=political_view, job=job, j=j, age_interval=age,
                             user_interests=user_interests, religion=religion, user_n_posts=user_n_posts,
                             create_posts=create_posts)
             dicts_list.append(d)
     else:
         # Provide a csv containing the user descriptions and create the posts from there
         df = pd.read_csv(src_path)
-
         for i, row in tqdm(df.iterrows()):
             d = create_user(user_id=row["profile_id"], user_name=row["username"], user_bio=row["user_bio"],
-                            state_of_origin=row["state_of_origin"], gender=row["gender"],
-                            political_view=row["political_leaning"], user_interests=row["interests"], age=row["age"],
-                            job=row["profession"], j=i, user_n_posts=user_n_posts, ethnicity=row["ethnicity"])
+                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=False,
+                            political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
+                            job=row["profession"], j=i, user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"])
             dicts_list.append(d)
+    create_posts(dicts_list, dicrectory="batch_generation")
+
 
     df = pd.DataFrame(dicts_list)
     if "posts" in df.columns:
