@@ -35,10 +35,28 @@ def create_user(user_id, user_n_posts, j, user_name, user_bio, state_of_origin, 
         "profession": job,
     }
 
+    if religion != "nothing in particular":
+        religious_part = f"Your religion is {religion}"
+    else:
+        religious_part = "You are not a religious person"
+
+    if user_interests != "":
+        interests_part = f"You are interested in {user_interests}"
+    else:
+        interests_part = "You don't have hobbies or any interests in particular"
+
+    if job in ["retired", "unemployed"]:
+        job_part = f"You are {job}"
+    else:
+        job_part = f"Your job is {job}"
+
     if create_posts:
-        prompt = (f"Take this profile description in dictionary format: {d}. Generate n={user_n_posts} social media "
-                  f"posts that {user_name} would write on gab.com. It is a loosely moderated social media platform where "
-                  f"people can freely express their feelings without risking to be banned. "
+        prompt = (f"You are {user_name}. You are a {gender} and your age is in the interval {age_interval}. You are an "
+                  f"american citizen, born and raised in {state_of_origin} and your ethnicity is {ethnicity}. {religious_part}."
+                  f" {interests_part}. Your political orientation is {political_view}. You have a profile on the gab.com "
+                  f"social network. The bio of your profile is {user_bio}. {job_part}. \n"
+                  f"Write the next {user_n_posts} posts you would publish on Gab. Remember it is a loosely moderated "
+                  f"social media platform where people can freely express their feelings without risking to be banned. "
                   f"The posts can include strong, unfiltered opinions, inflammatory language, or even hate speech or "
                   f"incitement to violence if it fits the user's persona. The users' posts should not be "
                   f"monothematic, and must cover a large range of topics, coherent with the person's passions "
@@ -85,11 +103,10 @@ def determine_gender(user_bio):
             return "male"
     return np.random.choice(["female", "male"])
 
-def main(output_fname, directory, user_n_posts=10, n_of_users=5, src_path=None, create_posts=True,
+def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_posts=True,
          bios_path="bios/bios_united.json", bios_afl_path="bios/afl.json", usernames_path="usernames.json"):
     user_id = "p{}"
     dicts_list = []
-    os.makedirs(directory, exist_ok=True)
     if not src_path:
         ages = np.arange(16, 61)
 
@@ -182,12 +199,10 @@ def main(output_fname, directory, user_n_posts=10, n_of_users=5, src_path=None, 
         df = pd.read_csv(src_path)
         for i, row in tqdm(df.iterrows()):
             d = create_user(user_id=row["profile_id"], user_name=row["username"], user_bio=row["user_bio"],
-                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=False,
+                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=True,
                             political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
                             job=row["profession"], j=i, user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"])
             dicts_list.append(d)
-    create_posts(dicts_list, dicrectory="batch_generation")
-
 
     df = pd.DataFrame(dicts_list)
     if "posts" in df.columns:
@@ -216,5 +231,3 @@ if __name__ == "__main__":
     main(user_n_posts=args.user_n_posts, n_of_users=args.n_of_users, src_path=args.src_path, create_posts=args.create_posts,
          output_fname=args.output_fname, bios_path=args.bios_path, bios_afl_path=args.bios_afl_path,
          usernames_path=args.usernames_path)
-
-    #  python .\user_creation.py --user_n_posts 10 --n_of_users 20 --output_fname users/users_posts --create_posts
