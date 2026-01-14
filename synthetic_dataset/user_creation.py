@@ -108,7 +108,7 @@ def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_post
     user_id = "p{}"
     dicts_list = []
     if not src_path:
-        ages = np.arange(16, 61)
+        ages = ["16-20", "21-30", "31-40", "41-50", "51-60", "61-70"]
 
         political_items = list(political_leanings.keys())
         political_probs = list(political_leanings.values())
@@ -180,9 +180,6 @@ def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_post
                 religion = np.random.choice(list(religions.keys()), p=list(religions.values()))
             age = np.random.choice(ages)
             job = np.random.choice(professions)
-            """user_description = ("As they say #HitlerwasRight. You can't vote evil out of office they all need to die, like alot. "
-                               "Just a dude who's been pushed to far by the corrupt system and tried of hiding what's really going on."
-                               "Total Jew/Nigger/Faggot Death")"""
 
             #user_n_posts = np.random.choice(number_of_posts)    # How many posts will be generated for the user
             #user_posts_lengths = np.random.choice(post_lengths, user_n_posts, replace=True)
@@ -204,11 +201,13 @@ def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_post
                             job=row["profession"], j=i, user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"])
             dicts_list.append(d)
 
+    no_duplicated_information = False
     df = pd.DataFrame(dicts_list)
     if "posts" in df.columns:
         df = df.explode("posts").reset_index(drop=True)
-        for col in df.columns[:-1]:
-            df.loc[df.duplicated(subset=["profile_id"]), col] = None
+        if no_duplicated_information:
+            for col in df.columns[:-1]:
+                df.loc[df.duplicated(subset=["profile_id"]), col] = None
     df.to_excel(output_fname + ".xlsx")
     df.to_csv(output_fname + ".csv", errors="ignore")
 

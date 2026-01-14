@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
-from synthetic_dataset.network_creation import read_edg_file
+from synthetic_dataset.network_creation import read_edg_file, write_edg_file
 
 def plot_figure(posts_per_month, xlabel, ylabel, title):
     plt.figure(figsize=(14, 6))
@@ -117,6 +117,7 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
 
 posts_src = "../dataset/posts_processed.csv"
 network_src = "../dataset/network/social_network.edg"
+dst = "../dataset/snapshots"
 snapshots = {
     "2016-2021": (2021,),
     "2022": (2022,),
@@ -134,15 +135,32 @@ posts_df["timestamp"] = pd.to_datetime(posts_df[timestamp_field])
 posts_df = posts_df.drop(columns=[c for c in posts_df.columns if c.startswith("Unnamed")])  # Remove useless columns
 
 previous_users = set()
+previous_snapshot_posts = pd.DataFrame()
 for i, snapshot in enumerate(snapshots):
-    os.makedirs(snapshot, exist_ok=True)
+    os.makedirs(os.path.join(dst, snapshot), exist_ok=True)
     if i == 0:
-        posts_of_snapshot = posts_df[posts_df[timestamp_field].dt.year <= snapshots[snapshot][0]]
+        posts_of_snapshot = posts_df[posts_df["timestamp"].dt.year <= snapshots[snapshot][0]]
     elif i == len(snapshots) - 1:
-        posts_of_snapshot = posts_df[(posts_df[timestamp_field].dt.year == snapshots[snapshot][0]) &
-                                     (posts_df[timestamp_field].dt.month >= snapshots[snapshot][1])]
+        posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
+                                     (posts_df["timestamp"].dt.month >= snapshots[snapshot][1])]
+    elif i == len(snapshots) - 2:
+        posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
+                                     (posts_df["timestamp"].dt.month < snapshots[snapshot][1])]
     else:
-        posts_of_snapshot = posts_df[posts_df[timestamp_field].dt.year == snapshots[snapshot][0]]
+        posts_of_snapshot = posts_df[posts_df["timestamp"].dt.year == snapshots[snapshot][0]]
+
+    posts_incremental = pd.concat([previous_snapshot_posts, posts_of_snapshot])
+    previous_snapshot_posts = posts_incremental
+
     users_in_snapshot = set(posts_of_snapshot[account_id_field].tolist())
     users = previous_users.union(users_in_snapshot)
+    previous_users = users
+
+    edgelist_current_snapshot = []
+    for ed in network_edges:
+        if int(ed[0]) in users and int(ed[1]) in users:
+            edgelist_current_snapshot.append((ed[0], ed[1]))
+    posts_incremental.to_csv(os.path.join(dst, snapshot, "posts_incremental.csv"), index=False)
+    posts_of_snapshot.to_csv(os.path.join(dst, snapshot, "posts_current_snapshot.csv"), index=False)
+    write_edg_file(edgelist_current_snapshot, os.path.join(dst, snapshot, "social_network.edg"))
 
