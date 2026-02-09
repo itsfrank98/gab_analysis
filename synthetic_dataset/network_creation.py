@@ -5,7 +5,6 @@ import pandas as pd
 import time
 from openai import OpenAI
 from tqdm import tqdm
-from llama_cpp import Llama
 
 def read_edg_file(path):
     edges = []
@@ -53,13 +52,6 @@ def create_files_for_custom_network_dimension(n_users, n_posts, all_users_path="
 
     return final_posts, final_users, edges_to_keep
 
-def count_tokens(messages):
-    llm = Llama(
-        model_path="../../../.lmstudio/models/MaziyarPanahi/Llama-3.3-70B-Instruct-GGUF/Llama-3.3-70B-Instruct.Q3_K_S.gguf"
-    )
-    tokens = llm.tokenize(
-        llm.create_chat_completion_openai_v1(messages=messages)["choices"][0]["message"]["content"].encode()
-    )
 
 def create_unique_edgelist(src_dir, dst_dir):
     l = []

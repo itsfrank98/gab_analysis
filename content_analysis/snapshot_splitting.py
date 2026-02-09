@@ -29,7 +29,9 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
     y23 = set(df[df['timestamp'].dt.year == 2023]["account_id"].tolist())
     y24 = set(df[df['timestamp'].dt.year==2024]["account_id"].tolist())
     janjul25 = set(df[(df['timestamp'].dt.year==2025) & (df['timestamp'].dt.month >=1) & (df['timestamp'].dt.month <7)]["account_id"].tolist())
-    jul25 = set(df[(df['timestamp'].dt.year==2025) & (df['timestamp'].dt.month>=7)]["account_id"].tolist())
+    jul25 = set(df[(df['timestamp'].dt.year==2025) & (df['timestamp'].dt.month>=7) & (df['timestamp'].dt.day<26)]["account_id"].tolist())
+    valid = set(df[(df['timestamp'].dt.year==2025) & (df['timestamp'].dt.month==7) & (df['timestamp'].dt.day>=26) & (df['timestamp'].dt.day<29)]["account_id"].tolist())
+    test = set(df[(df['timestamp'].dt.year==2025) & (df['timestamp'].dt.month==7) & (df['timestamp'].dt.day>29)]["account_id"].tolist())
 
     print("Until 2021: \n")
     print(f"Posts: {len(df[df['timestamp'].dt.year <= 2021])}")
@@ -89,6 +91,18 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
     newunion = union.union(jul25)
     jul25_len = len(newunion) - len(union)
 
+    print("Valid: \n")
+    print(f"Users: {len(valid)}")
+    union = newunion
+    newunion = union.union(valid)
+    valid_len = len(newunion) - len(union)
+
+    print("Test: \n")
+    print(f"Users: {len(test)}")
+    union = newunion
+    newunion = union.union(test)
+    test_len = len(newunion) - len(union)
+
     print(f"New users wrt previous: {len(newunion) - len(union)}")
     print(len(newunion))
     print("\n")
@@ -101,30 +115,37 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
         "2024": on_24_l,
         "Jan-Jul 25": janjul25_len,
         "Jul 25 -": jul25_len,
+        "Valid": valid_len,
+        "Test": test_len,
     }
 
     vals_progressive = {
         "until 2021": until_21_l,
-        #"2021": on_21_l+until_21_l,
         "2022": on_22_l+until_21_l,
         "2023": on_23_l+on_22_l+until_21_l,
         "2024": on_24_l+on_23_l+on_22_l+until_21_l,
         "Jan-Jul 25": janjul25_len+on_24_l+on_23_l+on_22_l+until_21_l,
         "Jul 25 -": jul25_len+janjul25_len+on_24_l+on_23_l+on_22_l+until_21_l,
+        "Valid": valid_len + jul25_len + janjul25_len + on_24_l + on_23_l + on_22_l + until_21_l,
+        "Test": test_len + valid_len + jul25_len + janjul25_len + on_24_l + on_23_l + on_22_l + until_21_l,
     }
 
     plot_figure(vals_progressive, xlabel="Snapshot", ylabel="users", title="Growth of the number of users")
 
 posts_src = "../dataset/posts_processed.csv"
-network_src = "../dataset/network/social_network.edg"
-dst = "../dataset/snapshots"
+network_src = "../dataset/social_network.edg"
+dst = "../dataset/snapshots_new"
+os.makedirs(dst, exist_ok=True)
 snapshots = {
     "2016-2021": (2021,),
     "2022": (2022,),
     "2023": (2023,),
     "2024": (2024,),
-    "Jan-Jul 25": (2025,7),
+    "Jan-Jun 25": (2025,6),
+    "Jun 25": (2025, 6),
     "Jul 25": (2025,7),
+    "Valid": (2025, 7, 26, 29),
+    "Test": (2025, 7, 29),
 }
 
 posts_df = pd.read_csv(posts_src)
@@ -137,17 +158,24 @@ posts_df = posts_df.drop(columns=[c for c in posts_df.columns if c.startswith("U
 previous_users = set()
 previous_snapshot_posts = pd.DataFrame()
 for i, snapshot in enumerate(snapshots):
-    os.makedirs(os.path.join(dst, snapshot), exist_ok=True)
     if i == 0:
         posts_of_snapshot = posts_df[posts_df["timestamp"].dt.year <= snapshots[snapshot][0]]
-    elif i == len(snapshots) - 1:
-        posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
-                                     (posts_df["timestamp"].dt.month >= snapshots[snapshot][1])]
-    elif i == len(snapshots) - 2:
+    elif i == len(snapshots) - 3:
         posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
                                      (posts_df["timestamp"].dt.month < snapshots[snapshot][1])]
+    elif i == len(snapshots) - 2:
+        posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
+                                     (posts_df["timestamp"].dt.month == snapshots[snapshot][1]) &
+                                     (posts_df["timestamp"].dt.day >= snapshots[snapshot][2]) &
+                                     (posts_df["timestamp"].dt.day < snapshots[snapshot][3])]
+    elif i == len(snapshots) - 1:
+        posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
+                                     (posts_df["timestamp"].dt.month >= snapshots[snapshot][1]) &
+                                     (posts_df["timestamp"].dt.day > snapshots[snapshot][2])]
+
     else:
         posts_of_snapshot = posts_df[posts_df["timestamp"].dt.year == snapshots[snapshot][0]]
+    os.makedirs(os.path.join(dst, snapshot), exist_ok=True)
 
     posts_incremental = pd.concat([previous_snapshot_posts, posts_of_snapshot])
     previous_snapshot_posts = posts_incremental
