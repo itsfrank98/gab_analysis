@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
+from tqdm import tqdm
 from synthetic_dataset.network_creation import read_edg_file, write_edg_file
 
 def plot_figure(posts_per_month, xlabel, ylabel, title):
@@ -134,18 +135,19 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
 
 posts_src = "../dataset/posts_processed.csv"
 network_src = "../dataset/social_network.edg"
-dst = "../dataset/snapshots_new"
+dst = "../dataset/snapshots_new1"
 os.makedirs(dst, exist_ok=True)
 snapshots = {
-    "2016-2021": (2021,),
-    "2022": (2022,),
-    "2023": (2023,),
-    "2024": (2024,),
-    "Jan-Jun 25": (2025,6),
-    "Jun 25": (2025, 6),
-    "Jul 25": (2025,7),
-    "Valid": (2025, 7, 26, 29),
-    "Test": (2025, 7, 29),
+    "2016-2021": (2021, 1, 12),
+    "2022": (2022, 1, 12),
+    "2023": (2023, 1, 12),
+    "2024": (2024, 1, 12),
+    "2025_01-03": (2025, 1, 3),
+    "2025_04-05": (2025, 4, 5),
+    "2025_06": (2025, 6, 6),
+    "2025_07_01_28": (2025, 7, 1, 28),
+    "2025_07_29_29_val": (2025, 7, 29, 29),
+    "2025_07_30_31_test": (2025, 7, 30, 31),
 }
 
 posts_df = pd.read_csv(posts_src)
@@ -157,24 +159,17 @@ posts_df = posts_df.drop(columns=[c for c in posts_df.columns if c.startswith("U
 
 previous_users = set()
 previous_snapshot_posts = pd.DataFrame()
-for i, snapshot in enumerate(snapshots):
-    if i == 0:
-        posts_of_snapshot = posts_df[posts_df["timestamp"].dt.year <= snapshots[snapshot][0]]
-    elif i == len(snapshots) - 3:
+for i, snapshot in tqdm(enumerate(snapshots)):
+    if len(snapshots[snapshot]) == 3:
         posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
-                                     (posts_df["timestamp"].dt.month < snapshots[snapshot][1])]
-    elif i == len(snapshots) - 2:
+                                     (posts_df["timestamp"].dt.month >= snapshots[snapshot][1]) &
+                                     (posts_df["timestamp"].dt.month <= snapshots[snapshot][2])]
+    elif len(snapshots[snapshot]) == 4:
         posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
                                      (posts_df["timestamp"].dt.month == snapshots[snapshot][1]) &
                                      (posts_df["timestamp"].dt.day >= snapshots[snapshot][2]) &
-                                     (posts_df["timestamp"].dt.day < snapshots[snapshot][3])]
-    elif i == len(snapshots) - 1:
-        posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
-                                     (posts_df["timestamp"].dt.month >= snapshots[snapshot][1]) &
-                                     (posts_df["timestamp"].dt.day > snapshots[snapshot][2])]
+                                     (posts_df["timestamp"].dt.day <= snapshots[snapshot][3])]
 
-    else:
-        posts_of_snapshot = posts_df[posts_df["timestamp"].dt.year == snapshots[snapshot][0]]
     os.makedirs(os.path.join(dst, snapshot), exist_ok=True)
 
     posts_incremental = pd.concat([previous_snapshot_posts, posts_of_snapshot])
