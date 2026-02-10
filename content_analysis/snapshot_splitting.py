@@ -135,7 +135,7 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
 
 posts_src = "../dataset/posts_processed.csv"
 network_src = "../dataset/social_network.edg"
-dst = "../dataset/snapshots_new1"
+dst = "../dataset/snapshots"
 os.makedirs(dst, exist_ok=True)
 snapshots = {
     "2016-2021": (2021, 1, 12),
@@ -161,9 +161,12 @@ previous_users = set()
 previous_snapshot_posts = pd.DataFrame()
 for i, snapshot in tqdm(enumerate(snapshots)):
     if len(snapshots[snapshot]) == 3:
-        posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
-                                     (posts_df["timestamp"].dt.month >= snapshots[snapshot][1]) &
-                                     (posts_df["timestamp"].dt.month <= snapshots[snapshot][2])]
+        if i == 0:
+            posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year <= snapshots[snapshot][0])]
+        else:
+            posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
+                                         (posts_df["timestamp"].dt.month >= snapshots[snapshot][1]) &
+                                         (posts_df["timestamp"].dt.month <= snapshots[snapshot][2])]
     elif len(snapshots[snapshot]) == 4:
         posts_of_snapshot = posts_df[(posts_df["timestamp"].dt.year == snapshots[snapshot][0]) &
                                      (posts_df["timestamp"].dt.month == snapshots[snapshot][1]) &
