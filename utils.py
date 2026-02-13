@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 import os
+
+
 def save_to_pickle(name, c):
     with open(name, 'wb') as f:
         pickle.dump(c, f)

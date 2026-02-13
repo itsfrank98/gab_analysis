@@ -133,6 +133,7 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
 
     plot_figure(vals_progressive, xlabel="Snapshot", ylabel="users", title="Growth of the number of users")
 
+
 posts_src = "../dataset/posts_processed.csv"
 network_src = "../dataset/social_network.edg"
 dst = "../dataset/snapshots"
@@ -144,14 +145,15 @@ snapshots = {
     "2024": (2024, 1, 12),
     "2025_01-03": (2025, 1, 3),
     "2025_04-05": (2025, 4, 5),
-    "2025_06": (2025, 6, 6),
-    "2025_07_01_28": (2025, 7, 1, 28),
-    "2025_07_29_29_val": (2025, 7, 29, 29),
-    "2025_07_30_31_test": (2025, 7, 30, 31),
+    "2025_06": (2025, 6, 1, 30),
+    "2025_07_01_20_val": (2025, 7, 1, 20),
+    "2025_07_21_28_test1": (2025, 7, 21, 28),
+    "2025_07_29_31_test2": (2025, 7, 29, 31),
 }
 
 posts_df = pd.read_csv(posts_src)
-network_edges = read_edg_file(network_src)
+network_edges = set(read_edg_file(network_src, type_pairs="tuple"))
+
 timestamp_field = "created_at"
 account_id_field = "account_id"
 posts_df["timestamp"] = pd.to_datetime(posts_df[timestamp_field])
