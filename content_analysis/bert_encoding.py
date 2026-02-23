@@ -6,7 +6,7 @@ import torch
 import argparse
 
 
-def main(df, content_field_name, features_dst):
+def main(df, content_field_name, features_dst, post_id_field_name):
     tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-cased')
     model = DistilBertModel.from_pretrained("distilbert-base-cased")
     dct = {}
@@ -17,11 +17,11 @@ def main(df, content_field_name, features_dst):
             encoded_input = tokenizer(post_text, return_tensors='pt', truncation=True)
             output = model(**encoded_input)
             output = output.last_hidden_state.mean(dim=1).squeeze()
-            dct[row["id"]] = output
+            dct[row[post_id_field_name]] = output
         if index % 100 == 0:
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-    with open(features_dst, "wb") as f:
+    with open(features_dst+".pkl", "wb") as f:
         pickle.dump(dct, f)
 
 def aggregate_embeddings(embs_dict, df, user_ids_set, user_id_field_name, post_id_field_name, dst):
@@ -31,7 +31,7 @@ def aggregate_embeddings(embs_dict, df, user_ids_set, user_id_field_name, post_i
         tensors = [embs_dict[post_id] for post_id in user_posts_ids]
         new_dict[user_id] = torch.stack(tensors).mean(dim=0)
 
-    with open(dst, "wb") as f:
+    with open(dst+".pkl", "wb") as f:
         pickle.dump(new_dict, f)
 
 
@@ -55,10 +55,10 @@ if __name__ == "__main__":
 
     df = pd.read_csv(df_src)
     if features_dst:
-        main(df, content_field_name, features_dst)
+        main(df, content_field_name, features_dst, post_id_field_name)
 
     if aggregated_features_dst:
-        with open(non_aggregated_embs_src, "rb") as f:
+        with open(non_aggregated_embs_src+".pkl", "rb") as f:
             feats_dict = pickle.load(f)
         user_ids_set = set(df[user_id_field_name].tolist())
         aggregate_embeddings(embs_dict=feats_dict, df=df, user_id_field_name=user_id_field_name, post_id_field_name=post_id_field_name,
