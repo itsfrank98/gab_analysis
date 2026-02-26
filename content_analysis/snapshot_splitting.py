@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
+import random
 from tqdm import tqdm
 from synthetic_dataset.network_creation import read_edg_file, write_edg_file
 
@@ -133,10 +134,10 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
 
     plot_figure(vals_progressive, xlabel="Snapshot", ylabel="users", title="Growth of the number of users")
 
-
+SHUFFLE = True
 posts_src = "../dataset/posts_processed.csv"
 network_src = "../dataset/social_network.edg"
-dst = "../dataset/snapshots"
+dst = "../dataset/shuffled"
 os.makedirs(dst, exist_ok=True)
 snapshots = {
     "2016-2021": (2021, 1, 12),
@@ -150,7 +151,22 @@ snapshots = {
     "2025_07_21_28_test1": (2025, 7, 21, 28),
     "2025_07_29_31_test2": (2025, 7, 29, 31),
 }
-
+if SHUFFLE:
+    keys_to_shuffle = ["2016-2021", "2022", "2023", "2024", "2025_01-03", "2025_04-05", "2025_06"]
+    random.shuffle(keys_to_shuffle)
+    snapshots = {
+        keys_to_shuffle[0]: snapshots[keys_to_shuffle[0]],
+        keys_to_shuffle[1]: snapshots[keys_to_shuffle[1]],
+        keys_to_shuffle[2]: snapshots[keys_to_shuffle[2]],
+        keys_to_shuffle[3]: snapshots[keys_to_shuffle[3]],
+        keys_to_shuffle[4]: snapshots[keys_to_shuffle[4]],
+        keys_to_shuffle[5]: snapshots[keys_to_shuffle[5]],
+        keys_to_shuffle[6]: snapshots[keys_to_shuffle[6]],
+        "2025_07_01_20_val": snapshots["2025_07_01_20_val"],
+        "2025_07_21_28_test1": snapshots["2025_07_21_28_test1"],
+        "2025_07_29_31_test2": snapshots["2025_07_29_31_test2"],
+    }
+print(snapshots)
 posts_df = pd.read_csv(posts_src)
 network_edges = set(read_edg_file(network_src, type_pairs="tuple"))
 

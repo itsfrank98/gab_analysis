@@ -4,6 +4,7 @@ from tqdm import tqdm
 import numpy as np
 import os
 import pandas as pd
+import random
 import torch
 
 def create_mapping(dst_mapping, dst_inv_mapping, src, consider_synthetic=True):
@@ -35,12 +36,18 @@ def tensor_creation(post_features, mapping, dfs):
     return tensor
 
 
-def interaction_dataset_creation(src: str, features, full_users_set, mapping):
+def interaction_dataset_creation(src: str, features, full_users_set, mapping, shuffle_until=None):
     ld = []
     network_so_far = set()
     edge_feat_dim = 172
     node_feat_dim = features[list(features.keys())[0]].shape[0]
     dirs = [d for d in os.listdir(src) if os.path.isdir(os.path.join(src, d))]
+    if shuffle_until:
+        to_shuffle = dirs[:shuffle_until]
+        random.shuffle(to_shuffle)
+        dirs = to_shuffle + dirs[shuffle_until:]
+    print(dirs)
+
     for i, d in tqdm(enumerate(dirs)):
         df_incremental = pd.read_csv(os.path.join(src, d, "posts_incremental.csv"))
         network = set(read_edg_file(os.path.join(src, d, "social_network.edg"), type_pairs="tuple"))
@@ -65,44 +72,54 @@ def interaction_dataset_creation(src: str, features, full_users_set, mapping):
 
 
 CREATE_TENSOR = False
-CREATE_INTERACTION_DF = False
-CONSIDER_SYNTHETIC = True
-SRC = "dataset/snapshots"
+CREATE_INTERACTION_DF = True
+CONSIDER_SYNTHETIC = False
+BASE = "dataset"
+SRC = "snapshots"
+INV_MAP_SRC ="inv_mapping.pkl"
+MAP_SRC = "mapping.pkl"
+BERT_FEATURES_REAL_SRC = "bert_features_real_posts.pkl"
+BERT_FEATURES_SYNTHETIC_SRC = "bert_features_synthetic.pkl"    # bert_synth_totti
+POST_PROCESSED_SRC = "dataset/posts_processed.csv"
+GAB_DF_NAME = "gab_shuffled3"
+SHUFFLE_UNTIL = -3
 
-if not os.path.exists(os.path.join(SRC, "inv_map.pkl")):
-    create_mapping(dst_inv_mapping=os.path.join(SRC, "inv_map.pkl"), dst_mapping=os.path.join(SRC, "mapping.pkl"),
-                   src="dataset/posts_processed.csv", consider_synthetic=CONSIDER_SYNTHETIC)
-inv_mapping = load_from_pickle(os.path.join(SRC, "inv_map.pkl"))
-mapping = load_from_pickle(os.path.join(SRC, "mapping.pkl"))
+
+if not os.path.exists(os.path.join(BASE, INV_MAP_SRC)):
+    create_mapping(dst_inv_mapping=os.path.join(BASE, INV_MAP_SRC), dst_mapping=os.path.join(BASE, MAP_SRC),
+                   src=POST_PROCESSED_SRC, consider_synthetic=CONSIDER_SYNTHETIC)
+inv_mapping = load_from_pickle(os.path.join(BASE, INV_MAP_SRC))
+mapping = load_from_pickle(os.path.join(BASE, MAP_SRC))
 
 
 if CREATE_INTERACTION_DF:
-    features = load_from_pickle(os.path.join(SRC, "bert_features_real_posts.pkl"))
-    full_df = pd.read_csv("dataset/posts_processed.csv")
+    features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_SRC))
+    full_df = pd.read_csv(POST_PROCESSED_SRC)
     users = set(full_df["account_id"].tolist())
-    df = interaction_dataset_creation(src=SRC, features=features, full_users_set=users, mapping=mapping)
-    df.to_csv(os.path.join(SRC, "gab.csv"))
+    df = interaction_dataset_creation(src=os.path.join(BASE, SRC), features=features, full_users_set=users, mapping=mapping, shuffle_until=SHUFFLE_UNTIL)
+    df.to_csv(os.path.join(BASE, SRC, GAB_DF_NAME + ".csv"))
 if CREATE_TENSOR:
     dfs_l = []
-    for d in os.listdir(SRC):
+    for d in os.listdir(BASE):
         if d == "synthetic":
-            dfs_l.append(pd.read_csv(os.path.join(SRC, d, "batch1_synthetic.csv")))
-            dfs_l.append(pd.read_csv(os.path.join(SRC, d, "batch2_synthetic.csv")))
-            dfs_l.append(pd.read_csv(os.path.join(SRC, d, "batch3_synthetic.csv")))
-        elif os.path.isdir(os.path.join(SRC, d)):
-            dfs_l.append(pd.read_csv(os.path.join(SRC, d, "posts_incremental.csv")))
-    real_post_features = load_from_pickle(os.path.join(SRC, "bert_features_real_posts.pkl"))
-    synthetic_post_features = load_from_pickle(os.path.join(SRC, "bert_features_synthetic.pkl"))
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch1_synthetic.csv")))
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch2_synthetic.csv")))
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch3_synthetic.csv")))
+        elif os.path.isdir(os.path.join(BASE, d)):
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "posts_incremental.csv")))
+    real_post_features = load_from_pickle(os.path.join(BASE, "bert_features_real_posts.pkl"))
+    synthetic_post_features = load_from_pickle(os.path.join(BASE, "bert_features_synthetic.pkl"))
     tensor = tensor_creation([real_post_features, synthetic_post_features], mapping, dfs_l)
     np.save("dataset/tensor.npy", tensor)
 if CONSIDER_SYNTHETIC:
-    df = pd.read_csv(os.path.join(SRC, "gab.csv"))
+    df = pd.read_csv(os.path.join(BASE, SRC, GAB_DF_NAME + ".csv"))
     df = df.drop(columns=[c for c in df.columns if c.__contains__("Unnamed")])
-    synthetic_features = load_from_pickle(os.path.join(SRC, "bert_features_synthetic.pkl"))
+    synthetic_features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_SYNTHETIC_SRC))
     ld = []
     node_feat_dim = synthetic_features[list(synthetic_features.keys())[0]].shape[0]
     last_ts = sorted(df["timestamp"].tolist())[-1]+1
-    synthetic_df_list = [os.path.join(SRC, f"batch{i}_synthetic.csv") for i in [1,2,3]]
+    synthetic_df_list = [os.path.join(BASE, f"batch{i}_synthetic.csv") for i in [1, 2, 3]]
+    synthetic_df_list.append(os.path.join(BASE, "totti_vangogh.csv"))
     for d in synthetic_df_list:
         synthetic_df = pd.read_csv(d)
         users = synthetic_df["account_id"].drop_duplicates().tolist()
@@ -118,4 +135,4 @@ if CONSIDER_SYNTHETIC:
 
     df_synth = pd.DataFrame(ld)
     final_df = pd.concat([df, df_synth]).sort_values(by=["timestamp"])
-    final_df.to_csv(os.path.join(SRC, "gab_with_synthetic.csv"))
+    final_df.to_csv(os.path.join(BASE, GAB_DF_NAME + "_with_synthetic.csv"))
