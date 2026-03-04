@@ -155,16 +155,16 @@ if SHUFFLE:
     keys_to_shuffle = ["2016-2021", "2022", "2023", "2024", "2025_01-03", "2025_04-05", "2025_06"]
     random.shuffle(keys_to_shuffle)
     snapshots = {
-        keys_to_shuffle[0]: snapshots[keys_to_shuffle[0]],
-        keys_to_shuffle[1]: snapshots[keys_to_shuffle[1]],
-        keys_to_shuffle[2]: snapshots[keys_to_shuffle[2]],
-        keys_to_shuffle[3]: snapshots[keys_to_shuffle[3]],
-        keys_to_shuffle[4]: snapshots[keys_to_shuffle[4]],
-        keys_to_shuffle[5]: snapshots[keys_to_shuffle[5]],
-        keys_to_shuffle[6]: snapshots[keys_to_shuffle[6]],
-        "2025_07_01_20_val": snapshots["2025_07_01_20_val"],
-        "2025_07_21_28_test1": snapshots["2025_07_21_28_test1"],
-        "2025_07_29_31_test2": snapshots["2025_07_29_31_test2"],
+        "0_"+keys_to_shuffle[0]: snapshots[keys_to_shuffle[0]],
+        "1_"+keys_to_shuffle[1]: snapshots[keys_to_shuffle[1]],
+        "2_"+keys_to_shuffle[2]: snapshots[keys_to_shuffle[2]],
+        "3_"+keys_to_shuffle[3]: snapshots[keys_to_shuffle[3]],
+        "4_"+keys_to_shuffle[4]: snapshots[keys_to_shuffle[4]],
+        "5_"+keys_to_shuffle[5]: snapshots[keys_to_shuffle[5]],
+        "6_"+keys_to_shuffle[6]: snapshots[keys_to_shuffle[6]],
+        "7_2025_07_01_20_val": snapshots["2025_07_01_20_val"],
+        "8_2025_07_21_28_test1": snapshots["2025_07_21_28_test1"],
+        "9_2025_07_29_31_test2": snapshots["2025_07_29_31_test2"],
     }
 print(snapshots)
 posts_df = pd.read_csv(posts_src)

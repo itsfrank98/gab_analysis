@@ -41,15 +41,23 @@ def interaction_dataset_creation(src: str, features, full_users_set, mapping, sh
     network_so_far = set()
     edge_feat_dim = 172
     node_feat_dim = features[list(features.keys())[0]].shape[0]
+    incremental_df_name = "posts_incremental.csv"
     dirs = [d for d in os.listdir(src) if os.path.isdir(os.path.join(src, d))]
-    if shuffle_until:
+    """if shuffle_until:
+        incremental_df_name = "posts_incremental_shuffled.csv"
         to_shuffle = dirs[:shuffle_until]
         random.shuffle(to_shuffle)
         dirs = to_shuffle + dirs[shuffle_until:]
-    print(dirs)
+        df_snaps = []
+        for d in dirs:
+            df_snaps.append(pd.read_csv(os.path.join(src, d, "posts_current_snapshot.csv")).drop(columns=["Unnamed: 0"]))
+            df_shuffled_inc = pd.concat(df_snaps)
+            df_shuffled_inc.to_csv(os.path.join(src, d, incremental_df_name), index=False)
+            print(len(df_shuffled_inc))
+    print(dirs)"""
 
     for i, d in tqdm(enumerate(dirs)):
-        df_incremental = pd.read_csv(os.path.join(src, d, "posts_incremental.csv"))
+        df_incremental = pd.read_csv(os.path.join(src, d, incremental_df_name))
         network = set(read_edg_file(os.path.join(src, d, "social_network.edg"), type_pairs="tuple"))
         edges_to_add = network - network_so_far
         users_so_far = list(set(df_incremental["account_id"].tolist()))
@@ -75,12 +83,12 @@ CREATE_TENSOR = False
 CREATE_INTERACTION_DF = True
 CONSIDER_SYNTHETIC = False
 BASE = "dataset"
-SRC = "snapshots"
+SRC = "shuffled"
 INV_MAP_SRC ="inv_mapping.pkl"
 MAP_SRC = "mapping.pkl"
 BERT_FEATURES_REAL_SRC = "bert_features_real_posts.pkl"
 BERT_FEATURES_SYNTHETIC_SRC = "bert_features_synthetic.pkl"    # bert_synth_totti
-POST_PROCESSED_SRC = "dataset/posts_processed.csv"
+POST_PROCESSED_SRC = os.path.join(BASE, "posts_processed.csv")
 GAB_DF_NAME = "gab_shuffled3"
 SHUFFLE_UNTIL = -3
 
