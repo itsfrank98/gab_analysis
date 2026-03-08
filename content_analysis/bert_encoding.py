@@ -58,7 +58,7 @@ if __name__ == "__main__":
         main(df, content_field_name, features_dst, post_id_field_name)
 
     if aggregated_features_dst:
-        with open(non_aggregated_embs_src+".pkl", "rb") as f:
+        with open(non_aggregated_embs_src, "rb") as f:
             feats_dict = pickle.load(f)
         user_ids_set = set(df[user_id_field_name].tolist())
         aggregate_embeddings(embs_dict=feats_dict, df=df, user_id_field_name=user_id_field_name, post_id_field_name=post_id_field_name,
