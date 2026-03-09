@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 unit = "users"
 method = "pca"
-consider_label = True
+consider_label = False
 
 real_feats_path = f"../dataset/bert_features_real_{unit}.pkl"
 synthetic_feats_path = f"../dataset/bert_features_synthetic_{unit}.pkl"
