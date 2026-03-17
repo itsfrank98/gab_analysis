@@ -36,14 +36,18 @@ def tensor_creation(post_features, mapping, dfs):
     return tensor
 
 
-def interaction_dataset_creation(src: str, features, full_users_set, mapping, shuffle_until=None):
+def interaction_dataset_creation(src: str, features, full_users_set, mapping, df_name="posts_incremental.csv", shuffle_until=None,
+                                 reset_network=False):
+    """
+    reset_network: set to true when you are in the baseline case, where we don't consider the temporal correlation of the data
+    """
     ld = []
     network_so_far = set()
     edge_feat_dim = 172
     node_feat_dim = features[list(features.keys())[0]].shape[0]
     incremental_df_name = "posts_incremental.csv"
     dirs = [d for d in os.listdir(src) if os.path.isdir(os.path.join(src, d))]
-    """if shuffle_until:
+    if shuffle_until:
         incremental_df_name = "posts_incremental_shuffled.csv"
         to_shuffle = dirs[:shuffle_until]
         random.shuffle(to_shuffle)
@@ -54,12 +58,15 @@ def interaction_dataset_creation(src: str, features, full_users_set, mapping, sh
             df_shuffled_inc = pd.concat(df_snaps)
             df_shuffled_inc.to_csv(os.path.join(src, d, incremental_df_name), index=False)
             print(len(df_shuffled_inc))
-    print(dirs)"""
 
     for i, d in tqdm(enumerate(dirs)):
-        df_incremental = pd.read_csv(os.path.join(src, d, incremental_df_name))
-        network = set(read_edg_file(os.path.join(src, d, "social_network.edg"), type_pairs="tuple"))
-        edges_to_add = network - network_so_far
+        df_incremental = pd.read_csv(os.path.join(src, d, df_name))
+        network = set(read_edg_file(os.path.join(src, d, "social_network.edg"), type_pairs=tuple))
+        if reset_network:
+            edges_to_add = network
+        else:
+            edges_to_add = network - network_so_far
+
         users_so_far = list(set(df_incremental["account_id"].tolist()))
         for u in tqdm(users_so_far):
             posts_by_user = df_incremental[df_incremental["account_id"] == u]["id"].tolist()
@@ -73,8 +80,11 @@ def interaction_dataset_creation(src: str, features, full_users_set, mapping, sh
                 ld.append({"follower_id": mapping[u], "followed_id": mapping[u], "timestamp": 0, "state_label": 0,
                            "comma_separated_list_of_features": ",".join(str(e) for e in np.zeros(node_feat_dim)), "type_interaction": 1})
         for edge in edges_to_add:
-            ld.append({"follower_id": mapping[int(edge[0])], "followed_id": mapping[int(edge[1])], "timestamp": i, "state_label": 0,
+            try:
+                ld.append({"follower_id": mapping[int(edge[0])], "followed_id": mapping[int(edge[1])], "timestamp": i, "state_label": 0,
                        "comma_separated_list_of_features": ",".join(str(e) for e in np.zeros(edge_feat_dim)), "type_interaction": 0})
+            except KeyError:
+                pass
         network_so_far = network
     return pd.DataFrame(ld)
 
@@ -82,16 +92,17 @@ def interaction_dataset_creation(src: str, features, full_users_set, mapping, sh
 CREATE_TENSOR = False
 CREATE_INTERACTION_DF = True
 CONSIDER_SYNTHETIC = False
-BASE = "dataset"
-SRC = "shuffled"
-INV_MAP_SRC ="inv_mapping.pkl"
-MAP_SRC = "mapping.pkl"
 BERT_FEATURES_REAL_SRC = "bert_features_real_posts.pkl"
 BERT_FEATURES_SYNTHETIC_SRC = "bert_features_synthetic.pkl"    # bert_synth_totti
+SHUFFLE_UNTIL = None    #-3 Se settato a none non fa lo shuffling temporale (snapshot ordinati in maniera casuale)
+df_name = "posts_current_snapshot.csv"  # "posts_incremental.csv"  Se settato a posts_incremental fa la divisione normale del dataset. Settalo a posts_current_snapshot per il caso baseline (nessun ordinamento temporale, solo train/val/test)
+BASE = "dataset"
+SRC = "baseline"
+INV_MAP_SRC ="inv_mapping_baseline.pkl"
+MAP_SRC = "mapping_baseline.pkl"
 POST_PROCESSED_SRC = os.path.join(BASE, "posts_processed.csv")
-GAB_DF_NAME = "gab_shuffled3"
-SHUFFLE_UNTIL = -3
-
+GAB_DF_NAME = "gab_baseline"
+RESET_NETWORK = True
 
 if not os.path.exists(os.path.join(BASE, INV_MAP_SRC)):
     create_mapping(dst_inv_mapping=os.path.join(BASE, INV_MAP_SRC), dst_mapping=os.path.join(BASE, MAP_SRC),
@@ -104,7 +115,8 @@ if CREATE_INTERACTION_DF:
     features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_SRC))
     full_df = pd.read_csv(POST_PROCESSED_SRC)
     users = set(full_df["account_id"].tolist())
-    df = interaction_dataset_creation(src=os.path.join(BASE, SRC), features=features, full_users_set=users, mapping=mapping, shuffle_until=SHUFFLE_UNTIL)
+    df = interaction_dataset_creation(src=os.path.join(BASE, SRC), features=features, full_users_set=users,
+                                      mapping=mapping, df_name=df_name, shuffle_until=SHUFFLE_UNTIL, reset_network=RESET_NETWORK)
     df.to_csv(os.path.join(BASE, SRC, GAB_DF_NAME + ".csv"))
 if CREATE_TENSOR:
     dfs_l = []
