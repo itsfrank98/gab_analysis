@@ -7,7 +7,6 @@ from datasets import Dataset
 from peft import LoraConfig, get_peft_model, TaskType
 import pandas as pd
 import logging
-from transformers import GPT2Tokenizer
 from trl import SFTTrainer
 
 logging.basicConfig(
@@ -16,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 df = pd.read_csv("../posts_concat_kirk_processed.csv")
-MODEL_ID = "openai-community/gpt2"  #"DreadPoor/Irix-12B-Model_Stock"
+MODEL_ID = "DreadPoor/Irix-12B-Model_Stock"  #"openai-community/gpt2"
 MIN_WORDS = 5
 MAX_WORDS = 300
 
@@ -42,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per_device_batch",  type=int,   default=4,     help="Per-device training batch size")
     parser.add_argument("--grad_accum",        type=int,   default=4,     help="Gradient accumulation steps")
     parser.add_argument("--learning_rate",     type=float, default=2e-4,  help="Peak learning rate")
-    parser.add_argument("--warmup_ratio",      type=float, default=0.03,  help="Warmup ratio")
+    parser.add_argument("--warmup_ratio",      type=float, default=0.05,  help="Warmup ratio")
     parser.add_argument("--max_seq_length",    type=int,   default=512,   help="Maximum token sequence length")
     parser.add_argument("--lr_scheduler",      type=str,   default="cosine", help="LR scheduler type")
     parser.add_argument("--weight_decay",      type=float, default=0.01,  help="Weight decay")
@@ -120,6 +119,48 @@ def convert_to_snowpiercer_format(instructions):
         formatted.append(chatml_text)
     return formatted
 
+
+# ── Inference helpers ─────────────────────────────────────────────────────────
+INFERENCE_PROMPT = "### Instruction: Write a post\n### Answer:"
+NUM_SAMPLE_POSTS = 5
+
+
+def generate_posts(model, tokenizer, n: int = NUM_SAMPLE_POSTS) -> list[str]:
+    """Generate n sample posts using the current model weights."""
+    model.eval()
+    inputs = tokenizer(INFERENCE_PROMPT, return_tensors="pt").to(model.device)
+    posts = []
+    with torch.no_grad():
+        for _ in range(n):
+            output = model.generate(
+                **inputs,
+                max_new_tokens=100,
+                do_sample=True,
+                temperature=0.9,
+                top_p=0.95,
+                repetition_penalty=1.1,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+            # Decode only the newly generated tokens (skip the prompt)
+            generated = output[0][inputs["input_ids"].shape[-1]:]
+            text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+            posts.append(text)
+    model.train()
+    return posts
+
+
+def print_posts(posts: list[str], label: str) -> None:
+    separator = "─" * 60
+    print(f"\n{separator}")
+    print(f"  {label}")
+    print(separator)
+    for i, post in enumerate(posts, 1):
+        print(f"\n  [{i}] {post}")
+    print(f"\n{separator}\n")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -150,13 +191,9 @@ def main():
         args.model_id,
         quantization_config=bnb_config,
         device_map="auto",
-        dtype=torch.bfloat16 if args.bits == 16 else None,
+        dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",  # remove if not supported
     )
-    gpt2_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-    text = "Write 5 posts that you would publish on gab.com"
-    encoded_text = gpt2_tokenizer.encode(text)
-    print(model(**encoded_text))
 
     model.config.use_cache = False
     model.config.pretraining_tp = 1
@@ -194,6 +231,7 @@ def main():
         save_steps=args.save_steps,
         save_total_limit=3,
         eval_steps=args.save_steps if eval_dataset else None,
+        eval_strategy="epoch",
         load_best_model_at_end=bool(eval_dataset),
         metric_for_best_model="eval_loss" if eval_dataset else None,
         report_to="none",  # swap for "wandb" or "tensorboard" if desired
@@ -201,7 +239,6 @@ def main():
         dataloader_num_workers=4,
         optim="paged_adamw_8bit" if args.bits in (4, 8) else "adamw_torch",
         gradient_checkpointing=True,
-        group_by_length=True,  # speeds up training by minimising padding
         ddp_find_unused_parameters=False,
     )
 
@@ -209,15 +246,15 @@ def main():
     # ── Trainer ───────────────────────────────────────────────────────────────
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         args=training_args,
-        max_seq_length=args.max_seq_length,
-        dataset_text_field="text",
-        completion_only_loss=True,
-        packing=False,  # must be False when using completion-only collator
     )
+
+    # ── Pre-training sample ───────────────────────────────────────────────────
+    logger.info("Generating sample posts BEFORE fine-tuning …")
+    before_posts = generate_posts(model, tokenizer)
+    print_posts(before_posts, label="BEFORE FINE-TUNING")
 
     # ── Train ─────────────────────────────────────────────────────────────────
     logger.info("Starting training …")
@@ -229,6 +266,10 @@ def main():
     trainer.model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
     logger.info("Done! ✓")
+
+    logger.info("Generating sample posts AFTER fine-tuning …")
+    after_posts = generate_posts(model, tokenizer)
+    print_posts(after_posts, label="AFTER FINE-TUNING")
 
     # ── Usage hint ────────────────────────────────────────────────────────────
     logger.info(
