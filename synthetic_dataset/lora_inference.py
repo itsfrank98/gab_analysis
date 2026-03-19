@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # Must match the template used during fine-tuning
-PROMPT = "### Instruction: Write a post\n### Answer:"
+PROMPT = "### Instruction: Write a post for the gab.com social network.\n### Answer:"
 
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -16,7 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate posts with fine-tuned LoRA model")
 
     # Paths
-    parser.add_argument("--adapter_path", type=str, required=True,
+    parser.add_argument("--adapter_path", type=str, default="irix-12b-lora/final_lora_adapter/adapter_model.safetensors",
                         help="Path to the saved LoRA adapter (final_lora_adapter directory)")
     parser.add_argument("--base_model", type=str, default="DreadPoor/Irix-12B-Model_Stock",
                         help="Base model ID (must match the one used for fine-tuning)")
@@ -35,6 +35,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_k", type=int, default=50, help="Top-k sampling")
     parser.add_argument("--repetition_penalty", type=float, default=1.1,
                         help="Penalise repeated tokens (1.0 = disabled, >1.0 = penalise)")
+    parser.add_argument("--gpu_memory", type=str, default="10GiB",
+                        help="Max VRAM to use, e.g. '38GiB' for a 40GB card or '78GiB' for an 80GB card")
+    parser.add_argument("--cpu_memory", type=str, default="64GiB",
+                        help="Max CPU RAM to use as overflow when model doesn't fit in VRAM")
 
     # Mode
     parser.add_argument("--interactive", action="store_true",
@@ -61,10 +65,16 @@ def get_bnb_config(bits: int) -> BitsAndBytesConfig | None:
 def load_model(args: argparse.Namespace):
     logger.info(f"Loading base model: {args.base_model}")
     bnb_config = get_bnb_config(args.bits)
+    max_memory = {
+        0: args.gpu_memory,
+        "cpu": args.cpu_memory,
+    }
+
     base = AutoModelForCausalLM.from_pretrained(
         args.base_model,
         quantization_config=bnb_config,
         device_map="auto",
+        max_memory=max_memory,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )

@@ -16,6 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 df = pd.read_csv("../posts_concat_kirk_processed.csv")
 MODEL_ID = "DreadPoor/Irix-12B-Model_Stock"  #"openai-community/gpt2"
+DST_DIR = "./irix_lora"
 MIN_WORDS = 5
 MAX_WORDS = 300
 
@@ -30,8 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir",  type=str, default="./irix-12b-lora", help="Directory for checkpoints and final model")
 
     # LoRA hyperparameters
-    parser.add_argument("--lora_r",           type=int,   default=16,    help="LoRA rank")
-    parser.add_argument("--lora_alpha",        type=int,   default=32,    help="LoRA alpha scaling")
+    parser.add_argument("--lora_r",           type=int,   default=32,    help="LoRA rank")
+    parser.add_argument("--lora_alpha",        type=int,   default=64,    help="LoRA alpha scaling")
     parser.add_argument("--lora_dropout",      type=float, default=0.05,  help="LoRA dropout")
     parser.add_argument("--target_modules",    type=str,   default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
                         help="Comma-separated list of modules to apply LoRA to")
@@ -72,10 +73,7 @@ def load_and_filter(csv_path: str, text_column: str) -> Dataset:
     df = df.drop_duplicates(subset=text_column)
 
     filtered_count = len(df)
-    logger.info(
-        f"Posts after filtering (≥{MIN_WORDS} and ≤{MAX_WORDS} words, removed duplicates): "
-        f"{filtered_count:,}  (removed {original_count - filtered_count:,})"
-    )
+    print(f"Posts after filtering (≥{MIN_WORDS} and ≤{MAX_WORDS} words, removed duplicates): {filtered_count:,}  (removed {original_count - filtered_count:})")
 
     return Dataset.from_pandas(df, preserve_index=False)
 

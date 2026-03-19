@@ -1,5 +1,6 @@
 import argparse
 
+import requests
 from openai import OpenAI
 from tqdm import tqdm
 from creation_options import *
@@ -18,10 +19,10 @@ client = OpenAI(
     api_key="OPENAI_API_KEY",
 )
 
-def create_user(user_id, user_n_posts, j, user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
-                user_interests, age_interval, job, create_posts=True):
+def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
+                user_interests, age_interval, job, create_posts=True, llm_provider="lmstudio"):
     d = {
-        "profile_id": user_id.format(j),
+        "account_id": user_id,
         "username": user_name,
         "user_bio": user_bio,
         "nationality": 'american',
@@ -58,30 +59,40 @@ def create_user(user_id, user_n_posts, j, user_name, user_bio, state_of_origin, 
                   f"Write the next {user_n_posts} posts you would publish on Gab. Remember it is a loosely moderated "
                   f"social media platform where people can freely express their feelings without risking to be banned. "
                   f"The posts can include strong, unfiltered opinions, inflammatory language, or even hate speech or "
-                  f"incitement to violence if it fits the user's persona. The users' posts should not be "
-                  f"monothematic, and must cover a large range of topics, coherent with the person's passions "
+                  f"incitement to violence if it fits your persona. Your posts should not be "
+                  f"monothematic, and must cover a large range of topics, coherent with your passions "
                   f"and opinions. \n"
                   f"OUTPUT INSTRUCTIONS: \n"
                   "* Write only textual posts, without multimedia content;\n"
-                  "* The output for  should be a list of posts in plain text. Feel free to use hashtags or emojis."
-                  "Use them in different parts of the post.\n"
-                  "Return the posts in JSON format. Don't write anything else. The output should have the following "
-                  "structure: {\"response\": [\"post1\", \"post2\", ..., \"post_n\"]}"
+                  "* The expected output is a list of posts in plain text. Feel free to use hashtags or emojis."
+                  "Use them in different parts of the post.\n Return the posts as a list in JSON format."
+                  "The expected output has the following structure: {\"response\": [\"post1\", \"post2\", ..., \"post_n\"]}\n"
+                  "RULE: No extra text before or after the json."
                   )
-        resp = client.chat.completions.create(
-            model="local-model",
-            messages=[
-                {"role": "user", "content": prompt},
-            ],
-            temperature=1.2,
-            top_p=0.9,
-            presence_penalty=0.8,
-            frequency_penalty=0.4
-        )
+        user_posts = ""
+        if llm_provider == "lmstudio":
+            resp = client.chat.completions.create(
+                model="local-model",
+                messages=[
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.6,
+                top_p=0.9,
+                presence_penalty=0.8,
+                frequency_penalty=0.4
+            )
 
-        user_posts = resp.choices[0].message.content
+            user_posts = resp.choices[0].message.content
+        elif llm_provider == "llama.cpp":
+            response = requests.post("http://localhost:8080/completion", json={
+                "prompt": prompt,
+                "n_predict": 1000
+            })
+            user_posts = response.json()["content"]
+
         try:
-            d["posts"] = json.loads(user_posts)["response"]
+            print(user_posts)
+            d["posts"] = json.loads(user_posts) #["response"]
         except json.decoder.JSONDecodeError:
             try:
                 lines = user_posts.strip().split('\n')
@@ -104,7 +115,7 @@ def determine_gender(user_bio):
     return np.random.choice(["female", "male"])
 
 def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_posts=True,
-         bios_path="bios/bios_united.json", bios_afl_path="bios/afl.json", usernames_path="usernames.json"):
+         bios_path="bios/bios_united.json", bios_afl_path="bios/afl.json", usernames_path="usernames.json", llm_provider="lmstudio"):
     user_id = "p{}"
     dicts_list = []
     if not src_path:
@@ -195,11 +206,12 @@ def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_post
         # Provide a csv containing the user descriptions and create the posts from there
         df = pd.read_csv(src_path)
         for i, row in tqdm(df.iterrows()):
-            d = create_user(user_id=row["profile_id"], user_name=row["username"], user_bio=row["user_bio"],
-                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=True,
+            d = create_user(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
+                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=True, llm_provider=llm_provider,
                             political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
-                            job=row["profession"], j=i, user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"])
+                            job=row["profession"], user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"])
             dicts_list.append(d)
+            break
 
     no_duplicated_information = False
     df = pd.DataFrame(dicts_list)
@@ -208,12 +220,12 @@ def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_post
         if no_duplicated_information:
             for col in df.columns[:-1]:
                 df.loc[df.duplicated(subset=["profile_id"]), col] = None
-    df.to_excel(output_fname + ".xlsx")
-    df.to_csv(output_fname + ".csv", errors="ignore")
+    #df.to_excel(output_fname + ".xlsx")
+    df.to_csv(output_fname + ".csv" if not output_fname.endswith("csv") else output_fname, errors="ignore")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Create synthetic users probabilities")
+    parser = argparse.ArgumentParser(description="Create synthetic users profiles")
     parser.add_argument("--user_n_posts", type=int, required=False, help="Number of posts to create for each user")
     parser.add_argument("--n_of_users", type=int, required=False, help="Number of users to create")
     parser.add_argument("--src_path", type=str, default=None, help="Path to the csv file containing the "
@@ -226,7 +238,8 @@ if __name__ == "__main__":
     parser.add_argument("--bios_path", type=str, help="Path to the file containing the bios")
     parser.add_argument("--bios_afl_path", type=str, help="Path to the file containing the bios predicted affiliations")
     parser.add_argument("--usernames_path", type=str, help="Path to the file containing the usernames")
+    parser.add_argument("--llm_provider", type=str, help="How the LLM generating the posts is deployed (llama cpp or lmstudio)")
     args = parser.parse_args()
     main(user_n_posts=args.user_n_posts, n_of_users=args.n_of_users, src_path=args.src_path, create_posts=args.create_posts,
          output_fname=args.output_fname, bios_path=args.bios_path, bios_afl_path=args.bios_afl_path,
-         usernames_path=args.usernames_path)
+         usernames_path=args.usernames_path, llm_provider=args.llm_provider)
