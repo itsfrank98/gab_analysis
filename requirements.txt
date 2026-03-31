@@ -35,7 +35,7 @@ Jinja2==3.1.6
 jiter==0.13.0
 joblib==1.5.3
 kiwisolver==1.4.9
-llama_cpp_python==0.3.16
+#llama_cpp_python==0.3.16
 markdown-it-py==4.0.0
 MarkupSafe==3.0.2
 matplotlib==3.10.8

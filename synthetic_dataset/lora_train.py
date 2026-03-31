@@ -2,9 +2,9 @@ import os.path
 import random
 import torch
 import argparse
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments, Qwen2Tokenizer
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 import pandas as pd
 import logging
 from trl import SFTTrainer
@@ -14,34 +14,35 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
-df = pd.read_csv("../posts_concat_kirk_processed.csv")
-MODEL_ID = "DreadPoor/Irix-12B-Model_Stock"  #"openai-community/gpt2"
-DST_DIR = "./irix_lora"
+#df = pd.read_csv("gab_analysis/posts_concat_kirk_processed.csv")
+MODEL_IDS = ["DreadPoor/Irix-12B-Model_Stock" , "openai-community/gpt2", "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive"]
+MODEL_ID = MODEL_IDS[0]
+DST_DIR = f"./lora_{MODEL_ID.split("/")[1].split("-")[0]}"
 MIN_WORDS = 5
 MAX_WORDS = 300
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="QLoRA SFT for Irix-12B")
+    parser = argparse.ArgumentParser(description="QLoRA SFT")
 
     # Data
-    parser.add_argument("--csv_path",    type=str, default="../posts_concat_kirk_processed.csv",
+    parser.add_argument("--csv_path",    type=str, default="posts_concat_kirk_processed.csv",
                         help="Path to CSV file containing posts")
     parser.add_argument("--text_column", type=str, default="content",  help="Name of the column with post text")
     parser.add_argument("--model_id",    type=str, default=MODEL_ID, help="HuggingFace model ID")
-    parser.add_argument("--output_dir",  type=str, default="./irix-12b-lora", help="Directory for checkpoints and final model")
+    parser.add_argument("--output_dir",  type=str, default=DST_DIR, help="Directory for checkpoints and final model")
 
     # LoRA hyperparameters
-    parser.add_argument("--lora_r",           type=int,   default=32,    help="LoRA rank")
-    parser.add_argument("--lora_alpha",        type=int,   default=64,    help="LoRA alpha scaling")
+    parser.add_argument("--lora_r",           type=int,   default=8,    help="LoRA rank")
+    parser.add_argument("--lora_alpha",        type=int,   default=16,    help="LoRA alpha scaling")
     parser.add_argument("--lora_dropout",      type=float, default=0.05,  help="LoRA dropout")
     parser.add_argument("--target_modules",    type=str,   default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
                         help="Comma-separated list of modules to apply LoRA to")
 
     # Training hyperparameters
     parser.add_argument("--epochs",            type=int,   default=3,     help="Number of training epochs")
-    parser.add_argument("--per_device_batch",  type=int,   default=4,     help="Per-device training batch size")
-    parser.add_argument("--grad_accum",        type=int,   default=4,     help="Gradient accumulation steps")
-    parser.add_argument("--learning_rate",     type=float, default=2e-4,  help="Peak learning rate")
+    parser.add_argument("--per_device_batch",  type=int,   default=16,     help="Per-device training batch size")
+    parser.add_argument("--grad_accum",        type=int,   default=2,     help="Gradient accumulation steps")
+    parser.add_argument("--learning_rate",     type=float, default=4e-4,  help="Peak learning rate")
     parser.add_argument("--warmup_ratio",      type=float, default=0.05,  help="Warmup ratio")
     parser.add_argument("--max_seq_length",    type=int,   default=512,   help="Maximum token sequence length")
     parser.add_argument("--lr_scheduler",      type=str,   default="cosine", help="LR scheduler type")
@@ -61,6 +62,20 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
+# ── Checkpoint detection ──────────────────────────────────────────────────────
+def get_last_checkpoint(output_dir: str) -> str | None:
+    """Return the path of the most recent checkpoint in output_dir, or None."""
+    if not os.path.isdir(output_dir):
+        return None
+    checkpoints = [
+        os.path.join(output_dir, d)
+        for d in os.listdir(output_dir)
+        if d.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, d))
+    ]
+    if not checkpoints:
+        return None
+    # Pick the one with the highest step number
+    return max(checkpoints, key=lambda p: int(p.split("-")[-1]))
 
 def load_and_filter(csv_path: str, text_column: str) -> Dataset:
     df = pd.read_csv(csv_path)
@@ -119,7 +134,7 @@ def convert_to_snowpiercer_format(instructions):
 
 
 # ── Inference helpers ─────────────────────────────────────────────────────────
-INFERENCE_PROMPT = "### Instruction: Write a post\n### Answer:"
+INFERENCE_PROMPT = "### Instruction: Write a post for the gab.com social network. \n### Answer:"
 NUM_SAMPLE_POSTS = 5
 
 
@@ -132,7 +147,7 @@ def generate_posts(model, tokenizer, n: int = NUM_SAMPLE_POSTS) -> list[str]:
         for _ in range(n):
             output = model.generate(
                 **inputs,
-                max_new_tokens=100,
+                max_new_tokens=200,
                 do_sample=True,
                 temperature=0.9,
                 top_p=0.95,
@@ -156,6 +171,13 @@ def print_posts(posts: list[str], label: str) -> None:
         print(f"\n  [{i}] {post}")
     print(f"\n{separator}\n")
 
+def supports_flash_attention():
+    if not torch.cuda.is_available():
+        return False
+    major, _ = torch.cuda.get_device_capability()
+    print(f"MAJOR = {major}")
+    print(torch.cuda.get_device_name())
+    return major >= 8
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -176,22 +198,45 @@ def main():
         logger.info(f"Train size: {len(train_dataset):,} | No evaluation split")
 
     logger.info(f"Loading tokenizer from {args.model_id}")
-
-    tokenizer = AutoTokenizer.from_pretrained(args.model_id, trust_remote_code=False, use_fast=True)
+    if args.model_id.__contains__("Qwen"):
+        tokenizer = Qwen2Tokenizer.from_pretrained(args.model_id, trust_remote_code=True)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.model_id, trust_remote_code=True, use_fast=True)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
+    last_checkpoint = get_last_checkpoint(args.output_dir)
+    if last_checkpoint:
+        logger.info(f"Resuming from checkpoint: {last_checkpoint}")
+        # Override epochs to train for 1 additional epoch from the checkpoint
+        resume_epochs = args.epochs + 1
+        logger.info(f"Total epochs extended to {resume_epochs} (was {args.epochs})")
+    else:
+        logger.info("No checkpoint found — training from scratch")
+        last_checkpoint = None
+        resume_epochs = args.epochs
+
     bnb_config = get_bnb_config(args.bits)
     logger.info(f"Loading model ({args.bits}-bit) from {args.model_id}")
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_id,
-        quantization_config=bnb_config,
-        device_map="auto",
-        dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",  # remove if not supported
-    )
+    if supports_flash_attention():
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_id,
+            quantization_config=bnb_config,
+            device_map="auto",
+            dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",
+            trust_remote_code=True
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_id,
+            quantization_config=bnb_config,
+            device_map="auto",
+            dtype=torch.bfloat16,
+            trust_remote_code=True
+        )
 
     model.config.use_cache = False
     model.config.pretraining_tp = 1
@@ -199,24 +244,29 @@ def main():
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
 
-    lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        target_modules=["c_attn", "c_proj"],  # "q_proj", "v_proj"
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        inference_mode=False,
-    )
+    if last_checkpoint:
+        # Resume: load the partial LoRA adapter from the checkpoint
+        logger.info(f"Loading LoRA adapter from checkpoint: {last_checkpoint}")
+        model = PeftModel.from_pretrained(model, last_checkpoint, is_trainable=True)
+    else:
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            target_modules=["q_proj", "v_proj"],  # "c_attn", "c_proj"
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            inference_mode=False,
+        )
+        model = get_peft_model(model, lora_config)
 
-    model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
     mixed_precision = "bf16" if args.bf16 else ("fp16" if args.fp16 else "no")
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_batch,
         per_device_eval_batch_size=args.per_device_batch,
-        num_train_epochs=args.epochs,
+        num_train_epochs=resume_epochs,
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
@@ -256,7 +306,7 @@ def main():
 
     # ── Train ─────────────────────────────────────────────────────────────────
     logger.info("Starting training …")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=last_checkpoint)
 
     # ── Save ──────────────────────────────────────────────────────────────────
     final_path = os.path.join(args.output_dir, "final_lora_adapter")

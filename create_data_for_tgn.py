@@ -35,9 +35,11 @@ def tensor_creation(post_features, mapping, dfs):
             tensor[i:, mapping[u], :] = avg
     return tensor
 
+def interaction_comment_dataset_creation(comments_df, features):
+    pass
 
-def interaction_dataset_creation(src: str, features, full_users_set, mapping, df_name="posts_incremental.csv", shuffle_until=None,
-                                 reset_network=False):
+def interaction_follow_dataset_creation(src: str, features, full_users_set, mapping, df_name="posts_incremental.csv", shuffle_until=None,
+                                        reset_network=False):
     """
     reset_network: set to true when you are in the baseline case, where we don't consider the temporal correlation of the data
     """
@@ -115,22 +117,9 @@ if CREATE_INTERACTION_DF:
     features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_SRC))
     full_df = pd.read_csv(POST_PROCESSED_SRC)
     users = set(full_df["account_id"].tolist())
-    df = interaction_dataset_creation(src=os.path.join(BASE, SRC), features=features, full_users_set=users,
-                                      mapping=mapping, df_name=df_name, shuffle_until=SHUFFLE_UNTIL, reset_network=RESET_NETWORK)
+    df = interaction_follow_dataset_creation(src=os.path.join(BASE, SRC), features=features, full_users_set=users,
+                                             mapping=mapping, df_name=df_name, shuffle_until=SHUFFLE_UNTIL, reset_network=RESET_NETWORK)
     df.to_csv(os.path.join(BASE, SRC, GAB_DF_NAME + ".csv"))
-if CREATE_TENSOR:
-    dfs_l = []
-    for d in os.listdir(BASE):
-        if d == "synthetic":
-            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch1_synthetic.csv")))
-            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch2_synthetic.csv")))
-            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch3_synthetic.csv")))
-        elif os.path.isdir(os.path.join(BASE, d)):
-            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "posts_incremental.csv")))
-    real_post_features = load_from_pickle(os.path.join(BASE, "bert_features_real_posts.pkl"))
-    synthetic_post_features = load_from_pickle(os.path.join(BASE, "bert_features_synthetic.pkl"))
-    tensor = tensor_creation([real_post_features, synthetic_post_features], mapping, dfs_l)
-    np.save("dataset/tensor.npy", tensor)
 if CONSIDER_SYNTHETIC:
     df = pd.read_csv(os.path.join(BASE, SRC, GAB_DF_NAME + ".csv"))
     df = df.drop(columns=[c for c in df.columns if c.__contains__("Unnamed")])
@@ -156,3 +145,16 @@ if CONSIDER_SYNTHETIC:
     df_synth = pd.DataFrame(ld)
     final_df = pd.concat([df, df_synth]).sort_values(by=["timestamp"])
     final_df.to_csv(os.path.join(BASE, GAB_DF_NAME + "_with_synthetic.csv"))
+if CREATE_TENSOR:
+    dfs_l = []
+    for d in os.listdir(BASE):
+        if d == "synthetic":
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch1_synthetic.csv")))
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch2_synthetic.csv")))
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "batch3_synthetic.csv")))
+        elif os.path.isdir(os.path.join(BASE, d)):
+            dfs_l.append(pd.read_csv(os.path.join(BASE, d, "posts_incremental.csv")))
+    real_post_features = load_from_pickle(os.path.join(BASE, "bert_features_real_posts.pkl"))
+    synthetic_post_features = load_from_pickle(os.path.join(BASE, "bert_features_synthetic.pkl"))
+    tensor = tensor_creation([real_post_features, synthetic_post_features], mapping, dfs_l)
+    np.save("dataset/tensor.npy", tensor)

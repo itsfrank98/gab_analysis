@@ -134,7 +134,7 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
 
     plot_figure(vals_progressive, xlabel="Snapshot", ylabel="users", title="Growth of the number of users")
 
-SHUFFLE = True
+SHUFFLE = False
 posts_src = "../dataset/posts_processed.csv"
 network_src = "../dataset/social_network.edg"
 dst = "../dataset/shuffled"

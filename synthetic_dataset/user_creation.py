@@ -1,15 +1,17 @@
 import argparse
-
 import requests
-from openai import OpenAI
-from tqdm import tqdm
-from creation_options import *
 import json
 import numpy as np
 import pandas as pd
 import re
 import os
 import time
+import torch
+from openai import OpenAI
+from tqdm import tqdm
+from creation_options import *
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from peft import PeftModel
 
 now = time.time()
 os.makedirs("users", exist_ok=True)
@@ -19,8 +21,82 @@ client = OpenAI(
     api_key="OPENAI_API_KEY",
 )
 
+def load_model_and_tokenizer(model_name: str, adapter_path: str, load_in_4bit: bool):
+    print(f"Loading tokenizer from: {model_name}")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+    # Ensure a pad token exists (required for batched generation)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    print(f"Loading base model: {model_name}")
+    if load_in_4bit:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        base_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+    else:
+        base_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+
+    # The adapter directory must contain the PEFT config + weights saved under
+    # the name "final lora adapter".  PEFT loads from the directory path.
+    print(f"Attaching LoRA adapter from: {adapter_path}")
+    model = PeftModel.from_pretrained(base_model, adapter_path)
+    model.eval()
+
+    return model, tokenizer
+
+def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
+    """Run inference for a single prompt and return the generated text."""
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.6,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            presence_penalty=0.8,
+            frequency_penalty=0.4,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
+    # Decode only the newly generated tokens (skip the prompt)
+    generated_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
+    return tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+
 def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
-                user_interests, age_interval, job, create_posts=True, llm_provider="lmstudio"):
+                user_interests, age_interval, job, peft_model, tokenizer, create_posts=True, llm_provider="lmstudio"):
+    """
+    Create the user profiles and/or the posts for that user fitting his profile
+    :param user_id: ID of the considered user
+    :param user_n_posts: Number of posts to generate for the user
+    :param user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
+                user_interests, age_interval, job: Socio-demographical traits of the user
+    :param create_posts: Set this to true for generating the user's posts
+    :param llm_provider: Can be 'lmstudio' or 'ollama' depending on how the LLM to use is hosted. It can also be left
+    to None if the LLM is loaded as a Peft model
+    :param peft_model: Peft LLM to use. Set it to None if the LLM is running on LMStudio or Ollama. If this parameter is
+    not None, the llm_provider param is ignored.
+    :param tokenizer: tokenizer for the peft model
+    """
     d = {
         "account_id": user_id,
         "username": user_name,
@@ -70,7 +146,10 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
                   "RULE: No extra text before or after the json."
                   )
         user_posts = ""
-        if llm_provider == "lmstudio":
+        if peft_model:
+            generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
+                                            device="cuda")
+        elif llm_provider == "lmstudio":
             resp = client.chat.completions.create(
                 model="local-model",
                 messages=[
@@ -89,6 +168,7 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
                 "n_predict": 1000
             })
             user_posts = response.json()["content"]
+
 
         try:
             print(user_posts)
@@ -114,11 +194,14 @@ def determine_gender(user_bio):
             return "male"
     return np.random.choice(["female", "male"])
 
-def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_posts=True,
+def main(output_fname, model_name, adapter_path, user_n_posts=10, n_of_users=5, users_profiles_path=None, create_posts=True,
          bios_path="bios/bios_united.json", bios_afl_path="bios/afl.json", usernames_path="usernames.json", llm_provider="lmstudio"):
     user_id = "p{}"
     dicts_list = []
-    if not src_path:
+
+    if not users_profiles_path:
+        # If the path to users profiles is not provided, the code generates the profiles to use. The profiles are made
+        # of name, bio, age, ethnicity, profession, interests, political orientation, state of origin, gender, religion
         ages = ["16-20", "21-30", "31-40", "41-50", "51-60", "61-70"]
 
         political_items = list(political_leanings.keys())
@@ -138,20 +221,19 @@ def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_post
 
         # These lists have a precise goal. When we generate a user, we first pick his leaning, sampling from the distribution.
         # When we pick the bio, it won't be a completely random sampling. If the sampled leaning is for instance right, or far
-        # right, the bio cannot belong to the left or far left leanings. It will be right, far right, unknown or non-political,
+        # right, the bio cannot lean towards left political ideas. It will be right, far right, unknown or non-political,
         # since the user may have a bio where he doesn't express political views. The same applies for the left leanings. On the
         # other hand, if the leaning is unknown or non-political, we don't want the bio to express (far) right/left views.
         # In this way we generate less profiles that don't make sense
 
         right_bios_keys = [k for k in list(bios_affiliations.keys()) if bios_affiliations[k] in ["right", "far_right"]]
         left_bios_keys = [k for k in list(bios_affiliations.keys()) if bios_affiliations[k] in ["left", "far_left"]]
-        any_bios_keys = [k for k in list(bios_affiliations.keys()) if
-                         bios_affiliations[k] in ["unknown", "non_political"]]
+        any_bios_keys = [k for k in list(bios_affiliations.keys()) if bios_affiliations[k] in ["unknown", "non_political"]]
 
         bios_keys_for_right = right_bios_keys + any_bios_keys
         bios_keys_for_left = left_bios_keys + any_bios_keys
 
-        for j in tqdm(range(n_of_users)):
+        for _ in tqdm(range(n_of_users)):
             user_name = np.random.choice(usernames)
             usernames.remove(user_name)
             n_hobbies = np.random.randint(0, 3)
@@ -198,18 +280,22 @@ def main(output_fname, user_n_posts=10, n_of_users=5, src_path=None, create_post
             #post_length_instruction = "\n ".join(post_length_instruction)
 
             d = create_user(user_id=user_id, user_name=user_name, user_bio=user_bio, state_of_origin=state_of_origin,
-                            gender=gender, ethnicity=ethnicity, political_view=political_view, job=job, j=j, age_interval=age,
+                            gender=gender, ethnicity=ethnicity, political_view=political_view, job=job, age_interval=age,
                             user_interests=user_interests, religion=religion, user_n_posts=user_n_posts,
-                            create_posts=create_posts)
+                            create_posts=create_posts, peft_model=None, tokenizer=None)
             dicts_list.append(d)
     else:
         # Provide a csv containing the user descriptions and create the posts from there
-        df = pd.read_csv(src_path)
+        df = pd.read_csv(users_profiles_path)
+        model, tokenizer = None, None
+        if model_name:
+            model, tokenizer = load_model_and_tokenizer(model_name=model_name, adapter_path=adapter_path, load_in_4bit=True)
         for i, row in tqdm(df.iterrows()):
             d = create_user(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
                             state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=True, llm_provider=llm_provider,
                             political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
-                            job=row["profession"], user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"])
+                            job=row["profession"], user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"],
+                            peft_model=model, tokenizer=tokenizer)
             dicts_list.append(d)
             break
 
@@ -228,7 +314,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create synthetic users profiles")
     parser.add_argument("--user_n_posts", type=int, required=False, help="Number of posts to create for each user")
     parser.add_argument("--n_of_users", type=int, required=False, help="Number of users to create")
-    parser.add_argument("--src_path", type=str, default=None, help="Path to the csv file containing the "
+    parser.add_argument("--users_profiles_path", type=str, default=None, help="Path to the csv file containing the "
                                                        "users' profiles from which the posts will be created")
     parser.add_argument("--output_fname", type=str, required=True, help="Path where the output will be saved."
                                                        "The output can either be the user descriptions, or the user "
@@ -239,7 +325,9 @@ if __name__ == "__main__":
     parser.add_argument("--bios_afl_path", type=str, help="Path to the file containing the bios predicted affiliations")
     parser.add_argument("--usernames_path", type=str, help="Path to the file containing the usernames")
     parser.add_argument("--llm_provider", type=str, help="How the LLM generating the posts is deployed (llama cpp or lmstudio)")
+    parser.add_argument("--model_name", help="Name of the peft model to use, in case you don't want to host it on lmstudio or ollama")
+    parser.add_argument("--adapter_path", type=str, help="Path to the file containing the adapters for the peft model, in case it is fine tuned")
     args = parser.parse_args()
-    main(user_n_posts=args.user_n_posts, n_of_users=args.n_of_users, src_path=args.src_path, create_posts=args.create_posts,
+    main(user_n_posts=args.user_n_posts, n_of_users=args.n_of_users, users_profiles_path=args.users_profiles_path, create_posts=args.create_posts,
          output_fname=args.output_fname, bios_path=args.bios_path, bios_afl_path=args.bios_afl_path,
-         usernames_path=args.usernames_path, llm_provider=args.llm_provider)
+         usernames_path=args.usernames_path, llm_provider=args.llm_provider, model_name=args.model_name, adapter_path=args.adapter_path)
