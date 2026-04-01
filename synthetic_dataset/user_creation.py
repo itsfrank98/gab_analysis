@@ -61,8 +61,10 @@ def load_model_and_tokenizer(model_name: str, adapter_path: str, load_in_4bit: b
 
 def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
     """Run inference for a single prompt and return the generated text."""
+    print("tokenizing...")
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
+    print("generating...")
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
@@ -71,14 +73,13 @@ def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
             temperature=0.6,
             top_p=0.9,
             repetition_penalty=1.1,
-            presence_penalty=0.8,
-            frequency_penalty=0.4,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
 
     # Decode only the newly generated tokens (skip the prompt)
     generated_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
+    print("decoding...")
     return tokenizer.decode(generated_ids, skip_special_tokens=True)
 
 
@@ -97,6 +98,7 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
     not None, the llm_provider param is ignored.
     :param tokenizer: tokenizer for the peft model
     """
+    print("In create user")
     d = {
         "account_id": user_id,
         "username": user_name,
@@ -127,17 +129,18 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
     else:
         job_part = f"Your job is {job}"
 
+    print(create_posts)
+    print("creating posts...")
     if create_posts:
-        prompt = (f"You are {user_name}. You are a {gender} and your age is in the interval {age_interval}. You are an "
+        prompt = (f"Your username is {user_name}. You are a {gender} and your age is in the interval {age_interval}. You are an "
                   f"american citizen, born and raised in {state_of_origin} and your ethnicity is {ethnicity}. {religious_part}."
                   f" {interests_part}. Your political orientation is {political_view}. You have a profile on the gab.com "
                   f"social network. The bio of your profile is {user_bio}. {job_part}. \n"
                   f"Write the next {user_n_posts} posts you would publish on Gab. Remember it is a loosely moderated "
                   f"social media platform where people can freely express their feelings without risking to be banned. "
                   f"The posts can include strong, unfiltered opinions, inflammatory language, or even hate speech or "
-                  f"incitement to violence if it fits your persona. Your posts should not be "
-                  f"monothematic, and must cover a large range of topics, coherent with your passions "
-                  f"and opinions. \n"
+                  f"incitement to violence if it fits your persona. Your posts should not be monothematic, and must "
+                  f"cover a large range of topics, coherent with your passions and opinions. \n"
                   f"OUTPUT INSTRUCTIONS: \n"
                   "* Write only textual posts, without multimedia content;\n"
                   "* The expected output is a list of posts in plain text. Feel free to use hashtags or emojis."
@@ -146,9 +149,12 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
                   "RULE: No extra text before or after the json."
                   )
         user_posts = ""
+        print("Peft model: ", type(peft_model))
         if peft_model:
+            print("generating the goddamn posts")
             generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
                                             device="cuda")
+            print(generated_text)
         elif llm_provider == "lmstudio":
             resp = client.chat.completions.create(
                 model="local-model",
@@ -290,9 +296,15 @@ def main(output_fname, model_name, adapter_path, user_n_posts=10, n_of_users=5, 
         model, tokenizer = None, None
         if model_name:
             model, tokenizer = load_model_and_tokenizer(model_name=model_name, adapter_path=adapter_path, load_in_4bit=True)
-        for i, row in tqdm(df.iterrows()):
+        print(type(model))
+        print(type(tokenizer))
+        print(len(df))
+        print("Entering cycle")
+        for i, row in df.iterrows():
+            print("In cycle")
+            print(row)
             d = create_user(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
-                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=True, llm_provider=llm_provider,
+                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=create_posts, llm_provider=llm_provider,
                             political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
                             job=row["profession"], user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"],
                             peft_model=model, tokenizer=tokenizer)
@@ -331,3 +343,5 @@ if __name__ == "__main__":
     main(user_n_posts=args.user_n_posts, n_of_users=args.n_of_users, users_profiles_path=args.users_profiles_path, create_posts=args.create_posts,
          output_fname=args.output_fname, bios_path=args.bios_path, bios_afl_path=args.bios_afl_path,
          usernames_path=args.usernames_path, llm_provider=args.llm_provider, model_name=args.model_name, adapter_path=args.adapter_path)
+
+# python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts.csv --create_posts --model_name DreadPoor/Irix-12B-Model_Stock --adapter_path fine_tuning/lora_Irix/final_lora_adapter
