@@ -144,14 +144,11 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
     else:
         job_part = f"Your job is {job}"
 
-
-    print("creating posts...")
     if create_posts:
         style_part = ""
         if real_posts:
             sampled_posts = random.sample(real_posts, 10)
             sampled_posts = [p.replace('\n', ' ').replace('\r', ' ') for p in sampled_posts]
-            print(sampled_posts)
             style_part = (
                 "Here are some example posts published on the platform. Analyze the tone, vocabulary register and sentence "
                 "structure. Ignore what the posts are about entirely.: "
@@ -182,14 +179,12 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
                   "* The expected output is a list of posts in plain text. Feel free to use hashtags or emojis."
                   "Use them in different parts of the post. Return the posts as a list in JSON format."
                   "The expected output has the following structure: {\"response\": [\"post1\", \"post2\", ..., \"post_n\"]}\n"
-                  "RULE: No extra text before or after the json."
                   )
 
         user_posts = ""
         if peft_model:
             generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
                                             device="cuda")
-            print(generated_text)
         elif llm_provider == "lmstudio":
             resp = client.chat.completions.create(
                 model="local-model",
@@ -208,23 +203,22 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
                 "prompt": prompt,
                 "n_predict": 1000
             })
-            user_posts = response.json()["content"]
-            print(user_posts)
-            print("---------------------------------------------------------------------------------------------------")
 
         try:
-            d["posts"] = json.loads(user_posts) #["response"]
-        except json.decoder.JSONDecodeError:
-            try:
-                lines = user_posts.strip().split('\n')
-                json_str = '\n'.join(lines[1:-1])
-                d["posts"] = json.loads(json_str)["response"]
-            except json.decoder.JSONDecodeError:
-                print("ERROR")
-                with open(os.path.join(dst_dir, f"{user_name}.txt"), "w", encoding="utf-8") as f:
-                    f.write(user_posts)
-                d["posts"] = [""] * 10
+            user_posts = response.json()["content"]
+            match = re.search(r'\{.*}', user_posts, re.DOTALL)
+            print(match)
+            if not match:
+                raise json.decoder.JSONDecodeError("No JSON object found", user_posts, 0)
+            d["posts"] = json.loads(match.group())["response"]
+        except (json.decoder.JSONDecodeError, KeyError) as err:
+            print("ERROR!!")
+            print(err)
+            with open(os.path.join(dst_dir, f"{user_name}.txt"), "w", encoding="utf-8") as f:
+                f.write(user_posts)
+            d["posts"] = [""] * 10
     return d
+
 
 def determine_gender(user_bio):
     for w in female_keywords:
@@ -335,6 +329,7 @@ def main(output_fname, model_name, adapter_path, real_posts_path=None, real_post
             print("I loaded the goddamn model!")
         if real_posts_path:
             real_posts = pd.read_csv(real_posts_path)
+            real_posts = real_posts[real_posts["language"]=="en"]
             real_posts["_word_count"] = real_posts[real_posts_text_column].str.split().str.len()
             real_posts = real_posts[(real_posts["_word_count"] >= 5) & (real_posts["_word_count"] <= 300)]
             real_posts = real_posts.drop(columns=["_word_count"]).drop_duplicates(subset=real_posts_text_column)
@@ -346,8 +341,6 @@ def main(output_fname, model_name, adapter_path, real_posts_path=None, real_post
                             job=row["profession"], user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"],
                             peft_model=model, tokenizer=tokenizer, real_posts=real_posts)
             dicts_list.append(d)
-            if i == 10:
-                break
 
     no_duplicated_information = False
     df = pd.DataFrame(dicts_list)
