@@ -70,3 +70,4 @@ if __name__ == "__main__":
     features_dst = "bert_features_posts.pkl"
     """
 
+#python bert_encoding.py --df_src ../synthetic_dataset/synthetic_posts.csv --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl --aggregated_features_dst ../dataset/bert_features_aggregated_few_shot  --user_id_field_name account_id
