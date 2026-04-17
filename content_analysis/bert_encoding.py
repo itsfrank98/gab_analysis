@@ -4,6 +4,7 @@ import pickle
 import pandas as pd
 import torch
 import argparse
+from numpy import arange
 
 
 def main(df, content_field_name, features_dst, post_id_field_name):
@@ -14,14 +15,17 @@ def main(df, content_field_name, features_dst, post_id_field_name):
     for index, row in tqdm(df.iterrows()):
         with torch.no_grad():
             post_text = row[content_field_name]
-            encoded_input = tokenizer(post_text, return_tensors='pt', truncation=True)
-            output = model(**encoded_input)
-            output = output.last_hidden_state.mean(dim=1).squeeze()
-            dct[row[post_id_field_name]] = output
+            try:
+                encoded_input = tokenizer(post_text, return_tensors='pt', truncation=True)
+                output = model(**encoded_input)
+                output = output.last_hidden_state.mean(dim=1).squeeze()
+                dct[row[post_id_field_name]] = output
+            except ValueError:
+                print(post_text)
         if index % 100 == 0:
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-    with open(features_dst+".pkl", "wb") as f:
+    with open(features_dst, "wb") as f:
         pickle.dump(dct, f)
 
 def aggregate_embeddings(embs_dict, df, user_ids_set, user_id_field_name, post_id_field_name, dst):
@@ -31,19 +35,20 @@ def aggregate_embeddings(embs_dict, df, user_ids_set, user_id_field_name, post_i
         tensors = [embs_dict[post_id] for post_id in user_posts_ids]
         new_dict[user_id] = torch.stack(tensors).mean(dim=0)
 
-    with open(dst+".pkl", "wb") as f:
+    with open(dst, "wb") as f:
         pickle.dump(new_dict, f)
 
 
 if __name__ == "__main__":
+    ft_dst = "../dataset/features_bert/bert_features_real_comments.pkl"
     parser = argparse.ArgumentParser()
-    parser.add_argument("--df_src", type=str, default="data/train.csv", required=True)
+    parser.add_argument("--df_src", type=str, default="../dataset/comments_only_posting_users.csv", required=False)
     parser.add_argument("--content_field_name", type=str, default="content", required=False)
-    parser.add_argument("--features_dst", type=str, help="path where the features dictionary is saved", required=False)
-    parser.add_argument("--user_id_field_name", type=str, default="user_id", required=False)
-    parser.add_argument("--post_id_field_name", type=str, default="post_id", required=False)
-    parser.add_argument("--aggregated_features_dst", type=str, help="path where the aggregated features are saved", required=False)
-    parser.add_argument("--non_aggregated_embs_src", type=str, help="path where the non-aggregated embeddings are saved", required=False)
+    parser.add_argument("--features_dst", type=str, help="path where the features dictionary is saved", required=False, default=ft_dst)
+    parser.add_argument("--user_id_field_name", type=str, default="account_id", required=False)
+    parser.add_argument("--post_id_field_name", type=str, default="id", required=False)
+    parser.add_argument("--non_aggregated_embs_src", type=str, help="path where the non-aggregated embeddings are saved", required=False, default=None)
+    parser.add_argument("--aggregated_features_dst", type=str, help="path where the aggregated features are saved", required=False, default="../dataset/features_bert/bert_features_aggregated_irix_few_shot.pkl")
     args = parser.parse_args()
     df_src = args.df_src
     content_field_name = args.content_field_name
@@ -53,11 +58,19 @@ if __name__ == "__main__":
     aggregated_features_dst = args.aggregated_features_dst
     non_aggregated_embs_src = args.non_aggregated_embs_src
 
+    SYNTHETIC = False
     df = pd.read_csv(df_src)
+
+    if SYNTHETIC:       # quello che sta in questo if serve a settare degli id per i post sintetici. andrebbe spostato nel file in cui vengono creati i post
+        df = df.drop(columns=[post_id_field_name]) if post_id_field_name in df.columns else df
+        post_ids = arange(len(df))
+        df[post_id_field_name] = post_ids
     if features_dst:
+        if not features_dst.endswith(".pkl"):
+            features_dst += ".pkl"
         main(df, content_field_name, features_dst, post_id_field_name)
 
-    if aggregated_features_dst:
+    if aggregated_features_dst and non_aggregated_embs_src:
         with open(non_aggregated_embs_src, "rb") as f:
             feats_dict = pickle.load(f)
         user_ids_set = set(df[user_id_field_name].tolist())
@@ -69,5 +82,5 @@ if __name__ == "__main__":
     content_field_name = "content"
     features_dst = "bert_features_posts.pkl"
     """
-
-#python bert_encoding.py --df_src ../synthetic_dataset/synthetic_posts.csv --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl --aggregated_features_dst ../dataset/bert_features_aggregated_few_shot  --user_id_field_name account_id
+# scp -P 3391 -r  .\content_analysis\bert_encoding.py francesco@193.204.187.7:/home/francesco/gab_analysis/content_analysis/bert_encoding.py
+# python bert_encoding.py --df_src ../synthetic_dataset/synthetic_posts_irix_fewshot.csv --features_dst ../dataset/bert_features_few_shot.pkl  --user_id_field_name account_id --content_field_name posts --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl --aggregated_features_dst ../dataset/bert_features_aggregated_few_shot

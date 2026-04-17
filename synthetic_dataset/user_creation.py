@@ -212,11 +212,11 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
                 raise json.decoder.JSONDecodeError("No JSON object found", user_posts, 0)
             d["posts"] = json.loads(match.group())["response"]
         except (json.decoder.JSONDecodeError, KeyError) as err:
-            print("ERROR!!")
+            print("ERROR!!", user_id)
             print(err)
-            with open(os.path.join(dst_dir, f"{user_name}.txt"), "w", encoding="utf-8") as f:
-                f.write(user_posts)
-            d["posts"] = [""] * 10
+            # with open(os.path.join(dst_dir, f"{user_id}.txt"), "w", encoding="utf-8") as f:
+            #     f.write(user_posts)
+            # d["posts"] = [""] * 10
     return d
 
 
@@ -231,9 +231,10 @@ def determine_gender(user_bio):
 
 def main(output_fname, model_name, adapter_path, real_posts_path=None, real_posts_text_column=None, user_n_posts=10,
          n_of_users=5, users_profiles_path=None,  create_posts=True, bios_path="bios/bios_united.json",
-         bios_afl_path="bios/afl.json", usernames_path="usernames.json", llm_provider="lmstudio"):
+         bios_afl_path="bios/afl.json", usernames_path="usernames.json", llm_provider="lmstudio", already_created_posts=None):
     user_id = "p{}"
     dicts_list = []
+    present_users = []
 
     if not users_profiles_path:
         # If the path to users profiles is not provided, the code generates the profiles to use. The profiles are made
@@ -334,13 +335,17 @@ def main(output_fname, model_name, adapter_path, real_posts_path=None, real_post
             real_posts = real_posts[(real_posts["_word_count"] >= 5) & (real_posts["_word_count"] <= 300)]
             real_posts = real_posts.drop(columns=["_word_count"]).drop_duplicates(subset=real_posts_text_column)
             real_posts = real_posts[real_posts_text_column].tolist()
+        if already_created_posts:
+            posts = pd.read_csv(already_created_posts)
+            present_users = list(posts.drop_duplicates(subset="account_id")["account_id"])
         for i, row in tqdm(df.iterrows()):
-            d = create_user(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
-                            state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=create_posts, llm_provider=llm_provider,
-                            political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
-                            job=row["profession"], user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"],
-                            peft_model=model, tokenizer=tokenizer, real_posts=real_posts)
-            dicts_list.append(d)
+            if row["account_id"] not in present_users:
+                d = create_user(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
+                                state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=create_posts, llm_provider=llm_provider,
+                                political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
+                                job=row["profession"], user_n_posts=user_n_posts, ethnicity=row["ethnicity"], religion=row["religion"],
+                                peft_model=model, tokenizer=tokenizer, real_posts=real_posts)
+                dicts_list.append(d)
 
     no_duplicated_information = False
     df = pd.DataFrame(dicts_list)
@@ -350,7 +355,10 @@ def main(output_fname, model_name, adapter_path, real_posts_path=None, real_post
             for col in df.columns[:-1]:
                 df.loc[df.duplicated(subset=["profile_id"]), col] = None
     #df.to_excel(output_fname + ".xlsx")
-    df.to_csv(output_fname + ".csv" if not output_fname.endswith("csv") else output_fname, errors="ignore")
+    print("dropping nans ", len(df))
+    df = df.dropna(subset="posts")
+    print("after dropping nans ", len(df))
+    df.to_csv(output_fname + ".csv" if not output_fname.endswith("csv") else output_fname, errors="ignore", index=False)
 
 
 if __name__ == "__main__":
@@ -374,12 +382,15 @@ if __name__ == "__main__":
     parser.add_argument("--usernames_path", type=str, help="Path to the file containing the usernames")
     parser.add_argument("--users_profiles_path", type=str, default=None, help="Path to the csv file containing the "
                                                                               "users' profiles from which the posts will be created")
+    parser.add_argument("--already_created_posts", type=str, default=None, help="Path to the csv file containing the "
+                                                                                "posts that have already been created. Set it to complete the dataset, if some users were "
+                                                                                "not generated or there were format errors")
     args = parser.parse_args()
     main(user_n_posts=args.user_n_posts, n_of_users=args.n_of_users, users_profiles_path=args.users_profiles_path, create_posts=args.create_posts,
          output_fname=args.output_fname, bios_path=args.bios_path, bios_afl_path=args.bios_afl_path, real_posts_path=args.real_posts_path,
          usernames_path=args.usernames_path, llm_provider=args.llm_provider, model_name=args.model_name, adapter_path=args.adapter_path,
-         real_posts_text_column=args.real_posts_text_column)
+         real_posts_text_column=args.real_posts_text_column, already_created_posts=args.already_created_posts)
 
 # python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts.csv --create_posts --model_name DreadPoor/Irix-12B-Model_Stock --adapter_path fine_tuning/lora_Irix/final_lora_adapter
 
-# python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts.csv --create_posts  --real_posts_path posts_processed.csv --llm_provider llama.cpp
+# python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts_added.csv --create_posts  --real_posts_path posts_processed.csv --llm_provider llama.cpp --already_created_posts synthetic_posts_irix_fewshot.csv

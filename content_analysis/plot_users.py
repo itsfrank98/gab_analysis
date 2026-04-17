@@ -13,6 +13,9 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+import os
+print(os.curdir)
+print(os.listdir("../dataset"))
 
 
 def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="users"):
@@ -70,8 +73,8 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synthetic_feats_path", type=str, default="../dataset/bert_features_aggregated_few_shot.pkl")
-    parser.add_argument("--real_feats_path", type=str, default="../dataset/bert_features_real_users.pkl")
+    parser.add_argument("--synthetic_feats_path", type=str, default="../dataset/features_bert/bert_features_aggregated_irix_few_shot.pkl")
+    parser.add_argument("--real_feats_path", type=str, default="../dataset/features_bert/bert_features_real_users.pkl")
     parser.add_argument("--consider_label", action="store_true")
     parser.add_argument("--method", type=str, default="pca")
     parser.add_argument("--unit", type=str, default="users")
