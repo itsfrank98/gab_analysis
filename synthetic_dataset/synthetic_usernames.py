@@ -1,8 +1,6 @@
 from openai import OpenAI, BadRequestError
 import pandas as pd
 import json
-import os
-from tqdm import tqdm
 
 usernames = pd.read_csv("../dataset/users_follower_followee.csv")["username"].tolist()
 

@@ -1,0 +1,27 @@
+[project]
+name = "gab-analysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.12.3"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "matplotlib>=3.10.9",
+    "mistralai==1.2.4",
+    "nltk>=3.9.4",
+    "numpy>=2.4.4",
+    "openai>=2.32.0",
+    "pandas==2.3.2",
+    "regex>=2026.4.4",
+    "requests>=2.33.1",
+    "tqdm>=4.67.3",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu121"}]
+

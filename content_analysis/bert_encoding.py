@@ -44,11 +44,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--df_src", type=str, default="../dataset/comments_only_posting_users.csv", required=False)
     parser.add_argument("--content_field_name", type=str, default="content", required=False)
-    parser.add_argument("--features_dst", type=str, help="path where the features dictionary is saved", required=False, default=ft_dst)
+    parser.add_argument("--features_dst", type=str, help="path where the features dictionary is saved", required=False)     # , default=ft_dst
     parser.add_argument("--user_id_field_name", type=str, default="account_id", required=False)
     parser.add_argument("--post_id_field_name", type=str, default="id", required=False)
     parser.add_argument("--non_aggregated_embs_src", type=str, help="path where the non-aggregated embeddings are saved", required=False, default=None)
     parser.add_argument("--aggregated_features_dst", type=str, help="path where the aggregated features are saved", required=False, default="../dataset/features_bert/bert_features_aggregated_irix_few_shot.pkl")
+    parser.add_argument("--add_post_id_flag", action="store_true", default=False)
+
     args = parser.parse_args()
     df_src = args.df_src
     content_field_name = args.content_field_name
@@ -57,11 +59,11 @@ if __name__ == "__main__":
     post_id_field_name = args.post_id_field_name
     aggregated_features_dst = args.aggregated_features_dst
     non_aggregated_embs_src = args.non_aggregated_embs_src
+    add_id = args.add_post_id_flag
 
-    SYNTHETIC = False
     df = pd.read_csv(df_src)
 
-    if SYNTHETIC:       # quello che sta in questo if serve a settare degli id per i post sintetici. andrebbe spostato nel file in cui vengono creati i post
+    if add_id:       # quello che sta in questo if serve a settare degli id per i post sintetici. andrebbe spostato nel file in cui vengono creati i post
         df = df.drop(columns=[post_id_field_name]) if post_id_field_name in df.columns else df
         post_ids = arange(len(df))
         df[post_id_field_name] = post_ids
@@ -83,4 +85,5 @@ if __name__ == "__main__":
     features_dst = "bert_features_posts.pkl"
     """
 # scp -P 3391 -r  .\content_analysis\bert_encoding.py francesco@193.204.187.7:/home/francesco/gab_analysis/content_analysis/bert_encoding.py
-# python bert_encoding.py --df_src ../synthetic_dataset/synthetic_posts_irix_fewshot.csv --features_dst ../dataset/bert_features_few_shot.pkl  --user_id_field_name account_id --content_field_name posts --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl --aggregated_features_dst ../dataset/bert_features_aggregated_few_shot
+# python bert_encoding.py --df_src ../synthetic_dataset/synthetic_posts_irix_fewshot.csv --features_dst ../dataset/bert_features_few_shot.pkl  --user_id_field_name account_id --content_field_name posts --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl
+# --aggregated_features_dst ../dataset/bert_features_aggregated_few_shot --add_post_id_flag

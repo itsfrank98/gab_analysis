@@ -18,7 +18,7 @@ def plot_figure(posts_per_month, xlabel, ylabel, title):
     plt.tight_layout()
     plt.show()
 
-def compute_statistics(csv_path="../dataset/posts_processed.csv"):
+def compute_statistics(csv_path):
     df = pd.read_csv(csv_path)
     df["timestamp"] = pd.to_datetime(df["created_at"])
     posts_per_month = df.groupby(df['timestamp'].dt.to_period('M')).size()
@@ -134,12 +134,14 @@ def compute_statistics(csv_path="../dataset/posts_processed.csv"):
     plot_figure(vals_progressive, xlabel="Snapshot", ylabel="users", title="Growth of the number of users")
 
 SHUFFLE = False
-posts_src = "../dataset/comments_only_posting_users.csv"  # "../dataset/posts_processed.csv"
+content_srcs = ["../dataset/comments_only_posting_users.csv", "../dataset/posts_processed.csv"]
+csv_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv", "comments_incremental.csv", "posts_incremental.csv"]
+posts_src =  content_srcs[1]
 network_src = None # "../dataset/social_network.edg"
 
 dst = "../dataset/snapshots"
-csv_name = "comments_current_snapshot.csv"       # name to use when saving the csv in the snapshots  "posts_current_snapshot.csv"
-incremental_csv_name = "comments_incremental.csv"  # posts_incremental.csv
+csv_name = csv_names[1]       # name to use when saving the csv in the snapshots
+incremental_csv_name = csv_names[3]  #
 timestamp_field = "created_at"
 account_id_field = "account_id"
 

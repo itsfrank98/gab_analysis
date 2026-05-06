@@ -18,7 +18,7 @@ def normalize_text(s: str) -> str:
     return "".join(c if ord(c) < 128 else " " for c in decomposed)
 
 
-def preprocess_content(df, content_field: str, rm_punctuation=True, rm_stopwords=True, lowerize=True):
+def preprocess_content(df, content_field: str, rm_punctuation=False, rm_stopwords=False, lowerize=False):
     """
     When preprocessing the content we want to:
     1. remove html tags, keeping the hashtags
@@ -31,6 +31,7 @@ def preprocess_content(df, content_field: str, rm_punctuation=True, rm_stopwords
     :return:
     """
     dicts = []
+    df = df[df["language"]=="en"]
     for i, r in tqdm(df.iterrows()):
         text_unprocessed = r[content_field]
         try:
@@ -63,8 +64,6 @@ def preprocess_content(df, content_field: str, rm_punctuation=True, rm_stopwords
         dicts.append(r_d)
     preprocessed_df = pd.DataFrame(dicts)
     preprocessed_df[content_field] = preprocessed_df[content_field].apply(normalize_text)
-    if "Unnamed: 0" in preprocessed_df.columns:
-        preprocessed_df = preprocessed_df.drop(columns=["Unnamed: 0"])
     preprocessed_df[content_field] = preprocessed_df[content_field].replace(r'\s+', ' ', regex=True).str.strip()
     return preprocessed_df
 
@@ -110,7 +109,7 @@ def main():
     if concat_by:
         preprocessed = concatenate_by_user(preprocessed, aggregator_column=concat_by, text_column=content_field)
     preprocessed = preprocessed.dropna(subset=content_field)
-    preprocessed.to_csv(output_fname, encoding="utf-8")
+    preprocessed.to_csv(output_fname, encoding="utf-8", index=False)
 
 
 if __name__ == "__main__":

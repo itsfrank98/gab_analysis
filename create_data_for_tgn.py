@@ -1,3 +1,8 @@
+"""
+In questo file creiamo i csv necessari per lanciare tgn. Al momento le interazioni gestite sono follow, authorship, comment, user evolution. Se vuoi considerare un altro
+tipo di interazione devi prima creare i file negli snapshot, e poi implementare qui la gestione di quell'interazione
+"""
+
 from utils import load_from_pickle, save_to_pickle
 from synthetic_dataset.network_creation import read_edg_file
 from tqdm import tqdm
@@ -35,18 +40,31 @@ def tensor_creation(post_features, mapping, dfs):
             tensor[i:, mapping[u], :] = avg
     return tensor
 
-def interaction_comment_dataset_creation(src, comment_features, df_name="comments.csv"):
-    ld = []
+def interaction_authorship_dataset_creation(src, content_features, type_interaction, df_name: str):
+    """
+    This method manages the 'author' relation between a user and some content. The possible authorship types are 2:
+     1) user writes a comment: source is the user ID, target is the ID of the post that the user is commenting;
+     2) user writes a post: source is the user ID, target is the ID of the post that the user is writing
+    type_interaction: 2 for the user posting a comment, 3 for the user publishing a post
+    """
+    ld = []     # list of dictionaries that will be later converted in the output dataframe
+    if type_interaction == 2:
+        target_field = "in_reply_to_id"
+    elif type_interaction == 3:
+        target_field = "id"
+    else:
+        raise ValueError("Select a valid value for the type interaction")
+
     dirs = [d for d in os.listdir(src) if os.path.isdir(os.path.join(src, d))]
     for i, d in enumerate(dirs):
         df_comments = pd.read_csv(os.path.join(src, d, df_name))
         print(len(df_comments))
         for j, row in tqdm(df_comments.iterrows()):
             source = row["account_id"]
-            target = row['in_reply_to_id']
-            features = comment_features[row["id"]]
+            target = row[target_field]
+            features = content_features[row["id"]]
             ld.append({"source": mapping[source], "target": target, "timestamp": i, "state_label": 0,
-                       "comma_separated_list_of_features": ",".join(str(e) for e in features), "type_interaction": 2})
+                       "comma_separated_list_of_features": ",".join(str(e) for e in features), "type_interaction": type_interaction})
     return pd.DataFrame(ld)
 
 def interaction_follow_dataset_creation(src, features, full_users_set, mapping, df_name="posts_incremental.csv",
@@ -113,28 +131,38 @@ if __name__ == "__main__":
     BERT_FEATURES_REAL_COMMENTS_SRC = "features_bert/bert_features_real_comments.pkl"
     BERT_FEATURES_SYNTHETIC_SRC = None  # "features_bert/bert_features_synthetic.pkl"
 
-    df_name = "comments.csv"  # "posts_incremental.csv"  Se settato a posts_incremental fa la divisione normale del dataset. Settalo a posts_current_snapshot per il caso baseline (nessun ordinamento temporale, solo train/val/test)
+    df_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv"]
+    processed_contents_src = ["comments_only_posting_users.csv", "posts_processed.csv"]
+
+    df_name = df_names[1]  #  Se settato a posts_incremental fa la divisione normale del dataset. Settalo a posts_current_snapshot per il caso baseline (nessun ordinamento temporale, solo train/val/test)
     BASE = "dataset"
     SNAPSHOT_SRC = "files_for_tgn/snapshots"        # "baseline"
+    CONTENT_PROCESSED_SRC = os.path.join(BASE, processed_contents_src[1])
+    OUTPUT_GAB_DF_NAME = "gab_posts"
+
     MAP_SRC = "files_for_tgn/mapping.pkl"    # "mapping_baseline.pkl"
     INV_MAP_SRC ="files_for_tgn/inv_mapping.pkl"  # "inv_mapping_baseline.pkl"
-    CONTENT_PROCESSED_SRC = os.path.join(BASE, "comments_only_posting_users.csv")      # posts_processed.csv
-    OUTPUT_GAB_DF_NAME = "gab_comments"
 
     if not os.path.exists(os.path.join(BASE, INV_MAP_SRC)):
         create_mapping(dst_inv_mapping=os.path.join(BASE, INV_MAP_SRC), dst_mapping=os.path.join(BASE, MAP_SRC),
-                       src=CONTENT_PROCESSED_SRC, consider_synthetic=CONSIDER_SYNTHETIC)
+                       src=os.path.join(BASE, "posts_processed.csv"), consider_synthetic=CONSIDER_SYNTHETIC)
     inv_mapping = load_from_pickle(os.path.join(BASE, INV_MAP_SRC))
     mapping = load_from_pickle(os.path.join(BASE, MAP_SRC))
 
-
     if CREATE_INTERACTION_DF:
-        comment_features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_COMMENTS_SRC))
         full_df = pd.read_csv(CONTENT_PROCESSED_SRC)
         users = set(full_df["account_id"].tolist())
         #df = interaction_follow_dataset_creation(src=os.path.join(BASE, SNAPSHOT_SRC), features=features, full_users_set=users,
         #                                         mapping=mapping, df_name=df_name, shuffle_until=SHUFFLE_UNTIL, reset_network=RESET_NETWORK)
-        df = interaction_comment_dataset_creation(src=os.path.join(BASE, SNAPSHOT_SRC), comment_features=comment_features, df_name="comments.csv")
+        interaction_type = 0
+        if df_name.__contains__("comment"):
+            interaction_type = 2
+            features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_COMMENTS_SRC))
+        elif df_name.__contains__("post"):
+            interaction_type = 3
+            features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_POSTS_SRC))
+
+        df = interaction_authorship_dataset_creation(src=os.path.join(BASE, SNAPSHOT_SRC), content_features=features, df_name=df_name, type_interaction=interaction_type)
         df.to_csv(os.path.join(BASE, SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))
     if CONSIDER_SYNTHETIC:
         df = pd.read_csv(os.path.join(BASE, SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))

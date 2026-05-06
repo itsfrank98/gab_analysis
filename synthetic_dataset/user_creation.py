@@ -182,41 +182,41 @@ def create_user(user_id, user_n_posts, user_name, user_bio, state_of_origin, gen
                   )
 
         user_posts = ""
-        if peft_model:
-            generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
-                                            device="cuda")
-        elif llm_provider == "lmstudio":
-            resp = client.chat.completions.create(
-                model="local-model",
-                messages=[
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.6,
-                top_p=0.9,
-                presence_penalty=0.8,
-                frequency_penalty=0.4
-            )
+        ok = False
+        while not ok:
+            print(user_id)
+            if peft_model:
+                generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
+                                                device="cuda")
+            elif llm_provider == "lmstudio":
+                resp = client.chat.completions.create(
+                    model="local-model",
+                    messages=[
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.6,
+                    top_p=0.9,
+                    presence_penalty=0.8,
+                    frequency_penalty=0.4
+                )
 
-            user_posts = resp.choices[0].message.content
-        elif llm_provider == "llama.cpp":
-            response = requests.post("http://localhost:8080/completion", json={
-                "prompt": prompt,
-                "n_predict": 1000
-            })
+                user_posts = resp.choices[0].message.content
+            elif llm_provider == "llama.cpp":
+                response = requests.post("http://localhost:8080/completion", json={
+                    "prompt": prompt,
+                    "n_predict": 1000
+                })
 
-        try:
-            user_posts = response.json()["content"]
-            match = re.search(r'\{.*}', user_posts, re.DOTALL)
-            print(match)
-            if not match:
-                raise json.decoder.JSONDecodeError("No JSON object found", user_posts, 0)
-            d["posts"] = json.loads(match.group())["response"]
-        except (json.decoder.JSONDecodeError, KeyError) as err:
-            print("ERROR!!", user_id)
-            print(err)
-            # with open(os.path.join(dst_dir, f"{user_id}.txt"), "w", encoding="utf-8") as f:
-            #     f.write(user_posts)
-            # d["posts"] = [""] * 10
+            try:
+                user_posts = response.json()["content"]
+                match = re.search(r'\{.*}', user_posts, re.DOTALL)
+                if not match:
+                    raise json.decoder.JSONDecodeError("No JSON object found", user_posts, 0)
+                d["posts"] = json.loads(match.group())["response"]
+            except (json.decoder.JSONDecodeError, KeyError) as err:
+                print("ERROR!!", user_id)
+                print(err)
+            ok = True
     return d
 
 
@@ -338,8 +338,10 @@ def main(output_fname, model_name, adapter_path, real_posts_path=None, real_post
         if already_created_posts:
             posts = pd.read_csv(already_created_posts)
             present_users = list(posts.drop_duplicates(subset="account_id")["account_id"])
+            print(present_users[:10])
         for i, row in tqdm(df.iterrows()):
             if row["account_id"] not in present_users:
+                print(row["account_id"])
                 d = create_user(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
                                 state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=create_posts, llm_provider=llm_provider,
                                 political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
@@ -394,3 +396,4 @@ if __name__ == "__main__":
 # python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts.csv --create_posts --model_name DreadPoor/Irix-12B-Model_Stock --adapter_path fine_tuning/lora_Irix/final_lora_adapter
 
 # python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts_added.csv --create_posts  --real_posts_path posts_processed.csv --llm_provider llama.cpp --already_created_posts synthetic_posts_irix_fewshot.csv
+
