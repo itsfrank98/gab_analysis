@@ -126,26 +126,28 @@ def interaction_follow_dataset_creation(src, features, full_users_set, mapping, 
 
 if __name__ == "__main__":
     CREATE_TENSOR = False
-    CONSIDER_SYNTHETIC = True
+    CONSIDER_SYNTHETIC = False
     CREATE_INTERACTION_DF = True
-    RESET_NETWORK = True
+    RESET_NETWORK = False
     SHUFFLE_UNTIL = None  # -3 Se settato a none non fa lo shuffling temporale (snapshot ordinati in maniera casuale)
+    CREATE_SYNTHETIC_SNAPSHOTS = 5      # setta questa variabile al unmero di snapshot che vuoi creare, oppure settala a 0
+    BASE = "dataset"
 
     # BERT FEATURES PATHS
-    BERT_FEATURES_REAL_POSTS_SRC = "dataset/features_bert/bert_features_real_posts.pkl"
-    BERT_FEATURES_REAL_COMMENTS_SRC = "dataset/features_bert/bert_features_real_comments.pkl"
-    BERT_FEATURES_SYNTHETIC_SRC = "dataset/features_bert/bert_features_few_shot_enriched.pkl"
+    BERT_FEATURES_REAL_POSTS_SRC = os.path.join(BASE, "features_bert/bert_features_real_posts.pkl")
+    BERT_FEATURES_REAL_COMMENTS_SRC = os.path.join(BASE, "features_bert/bert_features_real_comments.pkl")
+    BERT_FEATURES_SYNTHETIC_SRC = os.path.join(BASE, "features_bert/bert_features_few_shot_enriched.pkl")
 
 
     df_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv"]
     processed_contents_src = ["comments_only_posting_users.csv", "posts_processed.csv"]
 
     df_name = df_names[1]
-    BASE = "dataset"
-    SNAPSHOT_SRC = "files_for_tgn/snapshots"        # "baseline"
+
+    SNAPSHOT_SRC = os.path.join(BASE, "files_for_tgn/snapshots")        # "baseline"
     CONTENT_PROCESSED_SRC = os.path.join(BASE, processed_contents_src[1])
     OUTPUT_GAB_DF_NAME = "gab_posts"
-    CREATE_SYNTHETIC_SNAPSHOTS = 5
+
     synthetic_posts_src = os.path.join(BASE, "synthetic_posts_irix_fewshot_enriched.csv")
 
     MAP_SRC = "files_for_tgn/mapping.pkl"    # "mapping_baseline.pkl"
@@ -159,13 +161,12 @@ if __name__ == "__main__":
 
     if CREATE_SYNTHETIC_SNAPSHOTS > 0:
         synthetic_posts = pd.read_csv(synthetic_posts_src)
-        shuffled = synthetic_posts.sample(frac=1)
-        chunk_size = len(synthetic_posts)/CREATE_SYNTHETIC_SNAPSHOTS
+        shuffled = synthetic_posts.sample(frac=1).reset_index(drop=True)
+        chunk_size = len(synthetic_posts)//CREATE_SYNTHETIC_SNAPSHOTS
         dfs = [shuffled.iloc[i * chunk_size:(i + 1) * chunk_size] for i in range(CREATE_SYNTHETIC_SNAPSHOTS)]
+        dfs.append(shuffled.iloc[CREATE_SYNTHETIC_SNAPSHOTS * chunk_size:])
         for i, df in enumerate(dfs):
             df.to_csv(os.path.join(SNAPSHOT_SRC, f"batch{i}_synthetic.csv"), index=False)
-
-    #TODO CREA GLI SNAPSHOT E POI LANCIA IL RESTO DEL CODICE
 
     # branch that manages the interactions in the real dataset
     if CREATE_INTERACTION_DF:
@@ -175,29 +176,30 @@ if __name__ == "__main__":
         interaction_type = 0
         if df_name.__contains__("comment"):
             interaction_type = 2
-            features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_COMMENTS_SRC))
+            features = load_from_pickle(BERT_FEATURES_REAL_COMMENTS_SRC)
         elif df_name.__contains__("post"):
             interaction_type = 3
-            features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_REAL_POSTS_SRC))
+            features = load_from_pickle(BERT_FEATURES_REAL_POSTS_SRC)
 
         # gestisce il follow e l'evoluzione degli utenti da uno snapshot all'altro
-        df = interaction_follow_dataset_creation(src=os.path.join(BASE, SNAPSHOT_SRC), features=features,
+        df = interaction_follow_dataset_creation(src=SNAPSHOT_SRC, features=features,
                                                  full_users_set=users,
                                                  mapping=mapping, df_name=df_name, shuffle_until=SHUFFLE_UNTIL,
                                                  reset_network=RESET_NETWORK)
 
         # TODO la riga commentata sotto è per l'estensione, in cui consideriamo i commenti e le relazioni utente --writes--> post
-        #df = interaction_authorship_dataset_creation(src=os.path.join(BASE, SNAPSHOT_SRC), content_features=features, df_name=df_name, type_interaction=interaction_type)
-        df.to_csv(os.path.join(BASE, SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))
+        #df = interaction_authorship_dataset_creation(src=SNAPSHOT_SRC, content_features=features, df_name=df_name, type_interaction=interaction_type)
+
+        df.to_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))
     # branch that manages the synthetic dataset
     if CONSIDER_SYNTHETIC:
-        df = pd.read_csv(os.path.join(BASE, SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))
+        df = pd.read_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))
         df = df.drop(columns=[c for c in df.columns if c.__contains__("Unnamed")])
-        synthetic_features = load_from_pickle(os.path.join(BASE, BERT_FEATURES_SYNTHETIC_SRC))
+        synthetic_features = load_from_pickle(BERT_FEATURES_SYNTHETIC_SRC)
         ld = []
         node_feat_dim = synthetic_features[list(synthetic_features.keys())[0]].shape[0]
         last_ts = sorted(df["timestamp"].tolist())[-1]+1
-        synthetic_df_list = [os.path.join(BASE, f"batch{i}_synthetic.csv") for i in [1, 2, 3]]
+        synthetic_df_list = [f"batch{i}_synthetic.csv" for i in [1, 2, 3]]
         already_initialized_users = []
         #synthetic_df_list.append(os.path.join(BASE, "totti_vangogh.csv"))
         for d in synthetic_df_list:
