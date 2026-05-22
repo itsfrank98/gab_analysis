@@ -183,7 +183,7 @@ def create_user_initial_prompt(user_id, user_n_posts, user_name, user_bio, state
         ok = False
         counter_not_ok = 0
         while not ok and counter_not_ok<3:
-            print(user_id)
+            # print(user_id)
             if peft_model:
                 generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
                                                 device="cuda")
@@ -328,7 +328,6 @@ def create_user_moody_prompt(user_id, user_n_posts, user_name, user_bio, state_o
                 "The output must only contain the json, nothing else."
             )
             while not ok and counter_not_ok<3:
-                print(user_id)
                 if peft_model:
                     generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
                                                     device="cuda")
@@ -357,7 +356,6 @@ def create_user_moody_prompt(user_id, user_n_posts, user_name, user_bio, state_o
                     print("ERROR!!", user_id)
                     print(err)
                     counter_not_ok += 1
-
     return ld
 
 
@@ -481,7 +479,6 @@ def main(output_fname, model_name, adapter_path, type_prompt, real_posts_path=No
             present_users = list(posts.drop_duplicates(subset="account_id")["account_id"])
         for i, row in tqdm(df.iterrows()):
             if row["account_id"] not in present_users:
-                print(row["account_id"])
                 if type_prompt == "initial":
                     d = create_user_initial_prompt(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
                                 state_of_origin=row["state_of_origin"], gender=row["gender"], create_posts=create_posts, llm_provider=llm_provider,
@@ -497,8 +494,9 @@ def main(output_fname, model_name, adapter_path, type_prompt, real_posts_path=No
                                 peft_model=model, tokenizer=tokenizer, real_posts=real_posts,)
                     for e in d:
                         dicts_list.append(e)
-            if i == 1:
-                break
+                    df = pd.DataFrame(dicts_list)
+                    df.to_csv(output_fname + ".csv" if not output_fname.endswith("csv") else output_fname,
+                              errors="ignore", index=False)
 
     no_duplicated_information = False
     df = pd.DataFrame(dicts_list)

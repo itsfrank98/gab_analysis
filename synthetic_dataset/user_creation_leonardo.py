@@ -14,15 +14,12 @@ By providing the path to a csv file containing posts, they will be used for teac
 """
 
 import argparse
-import requests
 import json
-import numpy as np
 import pandas as pd
 import re
 import os
 import torch
 from tqdm import tqdm
-from creation_options import *
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 import random
@@ -32,15 +29,15 @@ now = time.time()
 os.makedirs("users", exist_ok=True)
 
 
-def load_model_and_tokenizer(model_name, adapter_path, load_in_4bit):
-    print(f"Loading tokenizer from: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+def load_model_and_tokenizer(model_path, adapter_path, load_in_4bit):
+    print(f"Loading tokenizer from: {model_path}")
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
     # Ensure a pad token exists (required for batched generation)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    print(f"Loading base model: {model_name}")
+    print(f"Loading base model: {model_path}")
     if load_in_4bit:
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -49,18 +46,19 @@ def load_model_and_tokenizer(model_name, adapter_path, load_in_4bit):
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model_path,
             quantization_config=bnb_config,
             device_map="auto",
             trust_remote_code=True,
         )
     else:
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model_path,
             torch_dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
         )
+    print("just loaded the LLM")
 
     # The adapter directory must contain the PEFT config + weights saved under
     # the name "final lora adapter".  PEFT loads from the directory path.
@@ -70,9 +68,9 @@ def load_model_and_tokenizer(model_name, adapter_path, load_in_4bit):
     model.eval()
     return model, tokenizer
 
+
 def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
     """Run inference for a single prompt and return the generated text."""
-    print("tokenizing...")
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
     with torch.no_grad():
@@ -89,7 +87,6 @@ def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
 
     # Decode only the newly generated tokens (skip the prompt)
     generated_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
-    print("decoding...")
     return tokenizer.decode(generated_ids, skip_special_tokens=True)
 
 
@@ -177,7 +174,7 @@ def create_user_initial_prompt(user_id, user_n_posts, user_name, user_bio, state
         while not ok and counter_not_ok<3:
             print(user_id)
             if peft_model:
-                generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
+                user_posts = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
                                                 device="cuda")
             try:
                 matches = re.findall(r'\{"response"[^{}]*\}', user_posts, re.DOTALL)
@@ -196,6 +193,7 @@ def create_user_initial_prompt(user_id, user_n_posts, user_name, user_bio, state
 
 def create_user_moody_prompt(user_id, user_n_posts, user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
                 user_interests, age_interval, job, peft_model, tokenizer, real_posts=None):
+
     d = {
         "account_id": user_id,
         "username": user_name,
@@ -210,7 +208,7 @@ def create_user_moody_prompt(user_id, user_n_posts, user_name, user_bio, state_o
         "age_interval": age_interval,
         "profession": job,
     }
-    ld = [d] * user_n_posts
+    ld = []
 
     if religion != "nothing in particular":
         religious_part = f"Your religion is {religion}"
@@ -244,81 +242,84 @@ def create_user_moody_prompt(user_id, user_n_posts, user_name, user_bio, state_o
             f"- \"{sampled_posts[8]}\""
             f"- \"{sampled_posts[9]}\""
             )
-        contexts = {
-            "emotional_state": [
-                "are tired after a long work day",
-                "are in a good mood, just had dinner with friends",
-                "are bored on a Sunday afternoon",
-                "are anxious about something at work",
-                "are excited about a personal achievement",
-                "are grieving or sad about something",
-                "are happy about something",
-                "are travelling",
-                "are on vacation",
-                "have argued with someone recently",
-                "are procrastinating",
-                "are amused by something funny you just saw online",
-                "are angry because you just found out your train is late"
-            ],
-            "format_style": [
-                "rant about something",
-                "ask a question to your followers",
-                "share a personal anecdote",
-                "post an opinion with no explanation",
-                "give an advice to your followers",
-                "use heavy sarcasm",
-            ]
-        }
 
-        for i in range(user_n_posts):
-            ok = False
-            counter_not_ok = 0
-            state = random.sample(contexts["emotional_state"], 1)[0]
-            format_style = random.sample(contexts["format_style"], 1)[0]
+    contexts = {
+        "emotional_state": [
+            "are tired after a long work day",
+            "are in a good mood, just had dinner with friends",
+            "are bored on a Sunday afternoon",
+            "are anxious about something at work",
+            "are excited about a personal achievement",
+            "are grieving or sad about something",
+            "are happy about something",
+            "are travelling",
+            "are on vacation",
+            "have argued with someone recently",
+            "are procrastinating",
+            "are amused by something funny you just saw online",
+            "are angry because you just found out your train is late"
+        ],
+        "format_style": [
+            "rant about something",
+            "ask a question to your followers",
+            "share a personal anecdote",
+            "post an opinion with no explanation",
+            "give an advice to your followers",
+            "use heavy sarcasm",
+        ]
+    }
 
-            prompt = (
-                f"Your username is {user_name}. You are a {gender} and your age is in the interval {age_interval}. You are an "
-                f"american citizen, born and raised in {state_of_origin} and your ethnicity is {ethnicity}. {religious_part}."
-                f" {interests_part}. Your political orientation is {political_view}. You have a profile on a loosely "
-                f"moderated social network platform where people can freely express their feelings without risking to be "
-                f"banned. The bio of your profile is {user_bio}. {job_part}. "
-                f"Context: you {state}. Write the next post you would publish. The post can include strong, unfiltered "
-                f"opinions, inflammatory language, or even hate speech if it fits your persona. In the post, you "
-                f"{format_style}. "
-                # f"{few_shot_part}"
-                f"OUTPUT INSTRUCTIONS: \n"
-                "* The post must be relevant to your passions and opinions;"
-                "* The post must not be longer than 100 words;"
-                "* The post doesn't contain multimedia content;\n"
-                "* The expected output is a JSON dictionary with this structure: {\"response\": <post>}. "
-                "The output must only contain the json, nothing else."
-            )
-            while not ok and counter_not_ok<3:
-                print(user_id)
-                generated_text = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
-                                                device="cuda")
-                print(generated_text)
-                try:
-                    matches = re.findall(r'\{"response"[^{}]*\}', user_posts, re.DOTALL)
-                    if matches:
-                        ld[i]["format_style"] = format_style
-                        ld[i]["state"] = state
-                        ld[i]["posts"] = json.loads(matches[-1])["response"]        # I use the -1 index because sometimes the LLM puts example dictionaries in the answer, putting the actual one as the last
-                        ok = True
-                        counter_not_ok = 0
-                    else:
-                        print("ERROR!")
-                        counter_not_ok += 1
-                except (json.decoder.JSONDecodeError, KeyError) as err:
-                    print("ERROR!!", user_id)
-                    print(err)
+    for i in range(user_n_posts):
+        ok = False
+        counter_not_ok = 0
+        state = random.sample(contexts["emotional_state"], 1)[0]
+        format_style = random.sample(contexts["format_style"], 1)[0]
+
+        prompt = (
+            f"Your username is {user_name}. You are a {gender} and your age is in the interval {age_interval}. You are an "
+            f"american citizen, born and raised in {state_of_origin} and your ethnicity is {ethnicity}. {religious_part}."
+            f" {interests_part}. Your political orientation is {political_view}. You have a profile on a loosely "
+            f"moderated social network platform where people can freely express their feelings without risking to be "
+            f"banned. The bio of your profile is {user_bio}. {job_part}. "
+            f"Context: you {state}. Write the next post you would publish. The post can include strong, unfiltered "
+            f"opinions, inflammatory language, or even hate speech if it fits your persona. In the post, you "
+            f"{format_style}. "
+            # f"{few_shot_part}"
+            f"OUTPUT INSTRUCTIONS: \n"
+            "* The post must be relevant to your passions and opinions;"
+            "* The post must not be longer than 100 words;"
+            "* The post doesn't contain multimedia content;\n"
+            "* The expected output is a JSON dictionary with this structure: {\"response\": <post>}. "
+            "The output must only contain the json, nothing else."
+        )
+        while not ok and counter_not_ok<3:
+            print(user_id)
+            user_posts = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
+                                            device="cuda")
+            print(user_posts)
+            try:
+                matches = re.findall(r'\{"response"[^{}]*\}', user_posts, re.DOTALL)
+                if matches:
+                    d_copy = d.copy()
+                    d_copy["format_style"] = format_style
+                    d_copy["state"] = state
+                    d_copy["posts"] = json.loads(matches[-1])["response"]       # I use the -1 index because sometimes the LLM puts example dictionaries in the answer, putting the actual one as the last
+                    ld.append(d_copy)
+                    ok = True
+                    counter_not_ok = 0
+                else:
+                    print("ERROR!")
                     counter_not_ok += 1
+            except (json.decoder.JSONDecodeError, KeyError) as err:
+                print("ERROR!!", user_id)
+                print(err)
+                counter_not_ok += 1
 
     return ld
 
 
-def main(output_fname, model_name, adapter_path, type_prompt, real_posts_path=None, real_posts_text_column=None,
-         user_n_posts=10,  users_profiles_path=None, already_created_posts=None):
+def main(output_fname, model_path, adapter_path, type_prompt, real_posts_path=None,
+         real_posts_text_column=None, user_n_posts=10, users_profiles_path=None, already_created_posts=None):
     user_id = "p{}"
     dicts_list = []
     present_users = []
@@ -326,8 +327,8 @@ def main(output_fname, model_name, adapter_path, type_prompt, real_posts_path=No
     # Provide a csv containing the user descriptions and create the posts from there
     df = pd.read_csv(users_profiles_path)
     model, tokenizer, real_posts = None, None, None
-    if model_name:
-        model, tokenizer = load_model_and_tokenizer(model_name=model_name, adapter_path=adapter_path, load_in_4bit=True)
+    if model_path:
+        model, tokenizer = load_model_and_tokenizer(model_path=model_path, adapter_path=adapter_path, load_in_4bit=True)
     if real_posts_path:
         real_posts = pd.read_csv(real_posts_path)
         real_posts = real_posts[real_posts["language"]=="en"]
@@ -356,8 +357,12 @@ def main(output_fname, model_name, adapter_path, type_prompt, real_posts_path=No
                             peft_model=model, tokenizer=tokenizer, real_posts=real_posts)
                 for e in d:
                     dicts_list.append(e)
-        if i == 1:
-            break
+                df = pd.DataFrame(dicts_list)
+                df.to_csv(output_fname + ".csv" if not output_fname.endswith("csv") else output_fname, errors="ignore",
+                          index=False)
+            if i == 1:
+                break
+
 
     no_duplicated_information = False
     df = pd.DataFrame(dicts_list)
@@ -378,8 +383,8 @@ if __name__ == "__main__":
     # Args Sorted alphabetically
     parser.add_argument("--adapter_path", type=str,
                         help="Path to the file containing the adapters for the peft model, in case it is fine tuned")
-    parser.add_argument("--model_name", required=False,
-                        help="Name of the model to use, in case you want to load it in the code")
+    parser.add_argument("--model_path", required=False, default="DreadPoor/Irix-12B-Model_Stock",
+                        help="Path to the directory where the downloaded LLM files are, in case you want to load it in the code")
 
     parser.add_argument("--output_fname", type=str, default="foo.csv",
                         help="Path where the output will be saved. The output can either be the user descriptions, or "
@@ -399,10 +404,10 @@ if __name__ == "__main__":
                         help="Type of prompt to use. 'with_mood' includes information about the user's mood")
     args = parser.parse_args()
     main(user_n_posts=args.user_n_posts, users_profiles_path=args.users_profiles_path, output_fname=args.output_fname,
-         real_posts_path=args.real_posts_path, model_name=args.model_name, adapter_path=args.adapter_path,
+         real_posts_path=args.real_posts_path, model_path=args.model_path, adapter_path=args.adapter_path,
          real_posts_text_column=args.real_posts_text_column, already_created_posts=None, type_prompt=args.type_prompt)    #args.already_created_posts
 
-# python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts.csv --model_name DreadPoor/Irix-12B-Model_Stock --adapter_path fine_tuning/lora_Irix/final_lora_adapter
+# python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts.csv --model_path /leonardo_scratch/large/userexternal/fbenedet/models/irix12b --adapter_path fine_tuning/lora_Irix/final_lora_adapter
 
 # python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts_added.csv --real_posts_path posts_processed.csv --already_created_posts synthetic_posts_irix_fewshot.csv
 
