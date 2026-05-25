@@ -28,7 +28,7 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
     synthetic_matrix = np.array([v for v in synthetic_feats.values()])
 
     if consider_label:
-        labeled_users = pd.read_csv("../dataset/vicuna_classification_results.csv")
+        labeled_users = pd.read_csv("../dataset/vicuna_classification_results_digennaro.csv")
         safe_users = labeled_users[labeled_users["binary_label"] == 0]["user_id"].tolist()
         risky_users = labeled_users[labeled_users["binary_label"] == 1]["user_id"].tolist()
         safe_matrix = np.array([real_feats[k] for k in list(real_feats.keys()) if k in safe_users])
