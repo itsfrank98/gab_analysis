@@ -9,20 +9,19 @@ import os
 import csv
 import pandas as pd
 import re
+import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
-MODEL_PATH = "/leonardo_scratch/large/userexternal/fbenedet/models/qwen"
-OUTPUT_CSV_FILE = "classification_results_real_dataset_no_rationale.csv"
-ALREADY_LABELED_POSTS = "qwen_labeled_gab_posts.csv"
-INPUT_CSV_FILE = "data/posts_nohtml.csv"
+
 ACCOUNT_ID_COLUMN = "account_id"
 POST_ID_COLUMN = "id"
 TEXT_COLUMN = "content"
 
 
+
 class LLM_Analyzer:
-    def __init__(self):
-        print(f"Initializing model: {MODEL_PATH}...")
+    def __init__(self, model_path):
+        print(f"Initializing model: {model_path}...")
 
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -33,13 +32,14 @@ class LLM_Analyzer:
 
         try:
             print("Loading tokenizer")
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, use_fast=False, trust_remote_code=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, trust_remote_code=True)
             print("Loaded tokenizer")
             self.model = AutoModelForCausalLM.from_pretrained(
-                MODEL_PATH,
+                model_path,
                 quantization_config=bnb_config,
                 device_map={"": accelerator.local_process_index},
-                trust_remote_code=True
+                trust_remote_code=True,
+                local_files_only=True
             )
             print("Model loaded and ready for inference")
         except Exception as e:
@@ -227,38 +227,68 @@ def save_to_csv(data_dict, filename):
 
 
 if __name__ == "__main__":
+    """
+    LEO
+    --model_path /leonardo_scratch/large/userexternal/fbenedet/models/qwen
+    --input_csv posts_nohtml_processed_0_-40k.csv
+    --labeled_posts qwen_labeled_gab_posts.csv
+    --output_csv classification_results_real_dataset_no_rationale.csv
+    
+    RECAS
+    --model_path /lustrehome/benedettifrancescophd/models/qwen
+    --input_csv posts_nohtml_processed_0_-40k.csv
+    --labeled_posts qwen_labeled_gab_posts.csv
+    --output_csv classification_results_real_dataset_no_rationale.csv
+    
+    """
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", required=True, type=str)
+    parser.add_argument("--output_dir", default="output", type=str)
+    parser.add_argument("--data_dir", default="data", type=str)
+    parser.add_argument("--input_csv", required=True, type=str)
+    parser.add_argument("--output_csv", required=True, type=str)
+    parser.add_argument("--labeled_posts", required=True, type=str)
+    args = parser.parse_args()
+
+    model_path = args.model_path
+    output_dir = args.output_dir
+    data_dir = args.data_dir
+    output_csv_file = os.path.join(output_dir, args.output_csv)
+    already_labeled_posts = os.path.join(output_dir, args.labeled_posts)
+    input_csv_file = os.path.join(data_dir, args.input_csv)
+    labeled_posts_path = os.path.join(output_dir, args.labeled_posts)
+
     accelerator = Accelerator()
 
-    base, ext = os.path.splitext(OUTPUT_CSV_FILE)
+    base, ext = os.path.splitext(output_csv_file)
     process_output_file = f"{base}_proc{accelerator.process_index}{ext}"
 
     if accelerator.is_main_process:
-        print(f"\nStarting computing file: {INPUT_CSV_FILE}")
+        print(f"\nStarting computing file: {input_csv_file}")
         print(f"Number of processes: {accelerator.num_processes}\n")
 
-    df = pd.read_csv(INPUT_CSV_FILE, encoding='utf-8')
+    df = pd.read_csv(input_csv_file, encoding='utf-8')
 
     # collect done posts from the original single-GPU file and all per-process files
-    done_posts = set()
-    for f in [OUTPUT_CSV_FILE] + [f"{base}_proc{rank}{ext}" for rank in range(accelerator.num_processes)]:
-        if os.path.exists(f):
-            done_posts.update(pd.read_csv(f)[POST_ID_COLUMN].astype(str).tolist())
-
-    if accelerator.is_main_process:
-        n_original = len(pd.read_csv(OUTPUT_CSV_FILE)) if os.path.exists(OUTPUT_CSV_FILE) else 0
-        print(f"Already processed posts found in {OUTPUT_CSV_FILE}: {n_original}")
+    done_posts_ids = set()
+    if os.path.exists(already_labeled_posts):
+        done_posts = pd.read_csv(already_labeled_posts, encoding='utf-8')
+        done_posts_ids.update(done_posts[POST_ID_COLUMN].astype(str).tolist())
+    print("ALREADY LABELED POSTS SOURCE: ", already_labeled_posts)
+    print(f"Already processed posts found: {len(done_posts_ids)}")
 
     df = df.drop_duplicates(subset=POST_ID_COLUMN)
-    df = df[~df[POST_ID_COLUMN].astype(str).isin(done_posts)]
+    df = df[~df[POST_ID_COLUMN].astype(str).isin(done_posts_ids)]
     df = df.reset_index(drop=True)
+    print(f"TOTAL NUMBER OF POSTS TO PROCESS: {len(df)}")
     df = df.drop(columns=[c for c in df.columns if c not in [ACCOUNT_ID_COLUMN, POST_ID_COLUMN, TEXT_COLUMN]])
 
     records = df.to_dict('records')
 
-    analyzer = LLM_Analyzer()  # each process loads its own copy
+    analyzer = LLM_Analyzer(model_path=model_path)  # each process loads its own copy
 
-    fieldnames = [ACCOUNT_ID_COLUMN, POST_ID_COLUMN, TEXT_COLUMN,
-                  "binary_label", "exact_level_found", "primary_ideology"]
+    fieldnames = [ACCOUNT_ID_COLUMN, POST_ID_COLUMN, TEXT_COLUMN, "binary_label", "exact_level_found", "primary_ideology"]
     error_count = 0
 
     with accelerator.split_between_processes(records) as shard:
