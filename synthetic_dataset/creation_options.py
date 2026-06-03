@@ -1,7 +1,8 @@
 # In this file I define the lists of possible values that the parameters can assume
 
 political_leanings = {"far_left": .01, "left": .01, "center": .005, "right": .2, "far_right": .52, "non_political": .215, "unknown": .04}
-#political_leanings = {"right": .2, "far_right": .8}
+
+posts_levels = {"level_0": .61, "level_1": .15, "level_2": .19, "level_3": .01, "level_4": .03, "level_5": .01}
 
 interests = ["basketball", "football", "tennis", "american football", "rugby", "golf", "athletics", "reading books",
              "sports", "travel", "cook", "fitness", "gardening", "politics", "technology", "self improvement",
@@ -19,7 +20,7 @@ professions_under_25 = ["waiter", "student", "baby sitter", "fast-food worker"]
 professions_over_25 = ["unemployed", "nurse", "vet", "driver", "janitor", "farmer", "mason", "plumber", "hairdresser",
                        "lawyer", "teacher", "accountant", "journalist", "software developer", "engineer"]
 
-ethnicities = {"caucasian":.6, "asian":.07, "black":.13, "mexican/latino":.2}
+ethnicities = {"caucasian": .6, "asian": .07, "black": .13, "mexican/latino": .2}
 religions = {"christian (evangelical protestant)": .24, "christian (catholic)": .2, "christian (black protestant)": .05,
              "christian (mormon)": .02, "christian (mainline protestant)": .11, "jewish": .02, "muslim": .01,
              "buddhist": .01, "hindu": .01, "atheist": .05, "agnostic": .06, "nothing in particular": .22}
