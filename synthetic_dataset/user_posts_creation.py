@@ -24,7 +24,8 @@ os.makedirs("users", exist_ok=True)
 
 
 def load_model_and_tokenizer(load_in_4bit):
-    model_path = "/lustrehome/benedettifrancescophd/models/irix/"
+    #model_path = "/leonardo_scratch/large/userexternal/fbenedet/models/irix12b/"
+    model_path = "/leonardo_scratch/large/userexternal/fbenedet/models/qwen"
     print(f"Loading tokenizer from: {model_path}")
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
@@ -75,14 +76,26 @@ def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
             eos_token_id=tokenizer.eos_token_id,
         )
     # Decode only the newly generated tokens (skip the prompt)
-    print(output_ids)
     generated_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
     return tokenizer.decode(generated_ids, skip_special_tokens=True)
 
 
 def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
                 user_interests, age_interval, job, peft_model, tokenizer, n_posts):
-
+    d = {
+        "account_id": user_id,
+        "username": user_name,
+        "user_bio": user_bio,
+        "nationality": 'american',
+        "state_of_origin": state_of_origin,
+        "gender": gender,
+        "ethnicity": ethnicity,
+        "religion": religion,
+        "political_leaning": political_view.replace("_", "-"),
+        "interests": user_interests,
+        "age_interval": age_interval,
+        "profession": job,
+    }
     ld = []
 
     if religion != "nothing in particular":
@@ -157,30 +170,31 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
             "* The expected output is a JSON dictionary with this structure: {\"response\": <post>}. "
             "Your answer must only contain the dictionary and nothing else."
         )
+        print(state)
+        print(style)
         while not ok and counter_not_ok<3:
-            print(user_id)
             user_posts = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
                                             device="cuda")
 
-            print(user_posts)
-        try:
-            matches = re.findall(r'\[[^{}]*\]', user_posts, re.DOTALL)[-1]
-            if matches:
-                print("ok")
-                d_copy = d.copy()
-                d_copy["format_style"] = style
-                d_copy["level"] = level
-                d_copy["posts"] = json.loads(matches[-1])["response"]        #I use the -1 index because sometimes the LLM puts example dictionaries in the answer, putting the actual one as the last
-                ld.append(d_copy)
-                ok = True
-                counter_not_ok = 0
-            else:
-                print("ERROR!")
+            try:
+                matches = re.findall(r'\{"response"[^{}]*\}', user_posts, re.DOTALL)
+                print(matches)
+                if matches:
+                    print("ok")
+                    d_copy = d.copy()
+                    d_copy["format_style"] = style
+                    d_copy["level"] = post_level
+                    d_copy["posts"] = json.loads(matches[-1])["response"]        #I use the -1 index because sometimes the LLM puts example dictionaries in the answer, putting the actual one as the last
+                    ld.append(d_copy)
+                    ok = True
+                    counter_not_ok = 0
+                else:
+                    print("ERROR!")
+                    counter_not_ok += 1
+            except (json.decoder.JSONDecodeError, KeyError) as err:
+                print("ERROR!!", user_id)
+                print(err)
                 counter_not_ok += 1
-        except (json.decoder.JSONDecodeError, KeyError) as err:
-            print("ERROR!!", user_id)
-            print(err)
-            counter_not_ok += 1
     print(f"TIME SPENT: {(time.time()-now)} seconds")
     return ld
 
@@ -195,12 +209,14 @@ def main(output_fname, n_posts, users_profiles_path=None, already_created_posts=
     if already_created_posts:
         posts = pd.read_csv(already_created_posts)
         present_users = list(posts.drop_duplicates(subset="account_id")["account_id"])
+    print("Creating posts...")
     for i, row in tqdm(df.iterrows()):
+        row = df.iloc[i]
         if row["account_id"] not in present_users:
             print(row["account_id"])
             d = create_user_moody_prompt(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
-                        state_of_origin=row["state_of_origin"], gender=row["gender"],
-                        political_view=row["political_leaning"], user_interests=row["interests"], age_interval=row["age_interval"],
+                        state_of_origin=row["state_of_origin"], gender=row["gender"], age_interval=row["age_interval"],
+                        political_view=row["political_leaning"], user_interests=row["interests"],
                         job=row["profession"], ethnicity=row["ethnicity"], religion=row["religion"],
                         peft_model=model, tokenizer=tokenizer, n_posts=n_posts)
             for e in d:
@@ -222,16 +238,16 @@ def main(output_fname, n_posts, users_profiles_path=None, already_created_posts=
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create synthetic users profiles")
     # Args Sorted alphabetically
-    parser.add_argument("--output_fname", type=str, default="foo.csv",
-                        help="Path where the output will be saved. The output can either be the user descriptions, or "
-                             "the user descriptions together with the synthetic posts")
     parser.add_argument("--users_profiles_path", type=str, default="synthetic_user_profiles.csv",
                         help="Path to the csv file containing the users' profiles from which the posts will be created")
+    parser.add_argument("--n_posts", type=int, default=None, help="How many posts to create per user")
     parser.add_argument("--already_created_posts", type=str, default=None,
                         help="Path to the csv file containing the posts that have already been created. Set it to "
                              "complete the dataset, if some users were not generated or there were format errors")
-    parser.add_argument("--n_posts", type=int, default=None, help="How many posts to create per user")
-    parser.add_argument("--model_path", type=str, default=None, help="Path to the model")
+    parser.add_argument("--output_fname", type=str, default="foo.csv",
+                        help="Path where the output will be saved. The output can either be the user descriptions, or "
+                             "the user descriptions together with the synthetic posts")
+    #parser.add_argument("--model_path", type=str, default=None, help="Path to the model")
     args = parser.parse_args()
     main(users_profiles_path=args.users_profiles_path, output_fname=args.output_fname, already_created_posts=None, n_posts=args.n_posts)    #args.already_created_posts
 
