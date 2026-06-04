@@ -157,30 +157,30 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
             "* The expected output is a JSON dictionary with this structure: {\"response\": <post>}. "
             "Your answer must only contain the dictionary and nothing else."
         )
-    #while not ok and counter_not_ok<3:
-    print(user_id)
-    user_posts = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
-                                    device="cuda")
+        while not ok and counter_not_ok<3:
+            print(user_id)
+            user_posts = generate_posts(model=peft_model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
+                                            device="cuda")
 
-    print(user_posts)
-    #try:
-        #matches = re.findall(r'\[[^{}]*\]', user_posts, re.DOTALL)[-1]
-        # if matches:
-        #     print("ok")
-        #     d_copy = d.copy()
-        #     d_copy["format_style"] = style
-        #     d_copy["level"] = level
-        #     d_copy["posts"] = json.loads(matches[-1])["response"]       # I use the -1 index because sometimes the LLM puts example dictionaries in the answer, putting the actual one as the last
-        #     ld.append(d_copy)
-        #     ok = True
-        #     counter_not_ok = 0
-        # else:
-        #     print("ERROR!")
-        #     counter_not_ok += 1
-    # except (json.decoder.JSONDecodeError, KeyError) as err:
-    #     print("ERROR!!", user_id)
-    #     print(err)
-    #     counter_not_ok += 1
+            print(user_posts)
+        try:
+            matches = re.findall(r'\[[^{}]*\]', user_posts, re.DOTALL)[-1]
+            if matches:
+                print("ok")
+                d_copy = d.copy()
+                d_copy["format_style"] = style
+                d_copy["level"] = level
+                d_copy["posts"] = json.loads(matches[-1])["response"]        #I use the -1 index because sometimes the LLM puts example dictionaries in the answer, putting the actual one as the last
+                ld.append(d_copy)
+                ok = True
+                counter_not_ok = 0
+            else:
+                print("ERROR!")
+                counter_not_ok += 1
+        except (json.decoder.JSONDecodeError, KeyError) as err:
+            print("ERROR!!", user_id)
+            print(err)
+            counter_not_ok += 1
     print(f"TIME SPENT: {(time.time()-now)} seconds")
     return ld
 
@@ -230,8 +230,8 @@ if __name__ == "__main__":
     parser.add_argument("--already_created_posts", type=str, default=None,
                         help="Path to the csv file containing the posts that have already been created. Set it to "
                              "complete the dataset, if some users were not generated or there were format errors")
-    parser.add_argument("--n_posts", type=int, default=None,
-                        help="How many posts to create per user")
+    parser.add_argument("--n_posts", type=int, default=None, help="How many posts to create per user")
+    parser.add_argument("--model_path", type=str, default=None, help="Path to the model")
     args = parser.parse_args()
     main(users_profiles_path=args.users_profiles_path, output_fname=args.output_fname, already_created_posts=None, n_posts=args.n_posts)    #args.already_created_posts
 

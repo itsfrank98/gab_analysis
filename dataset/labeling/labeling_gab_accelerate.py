@@ -11,7 +11,7 @@ import pandas as pd
 import re
 import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-
+import matplotlib.pyplot as plt
 
 ACCOUNT_ID_COLUMN = "account_id"
 POST_ID_COLUMN = "id"
@@ -227,21 +227,6 @@ def save_to_csv(data_dict, filename):
 
 
 if __name__ == "__main__":
-    """
-    LEO
-    --model_path /leonardo_scratch/large/userexternal/fbenedet/models/qwen
-    --input_csv posts_nohtml_processed_0_-40k.csv
-    --labeled_posts qwen_labeled_gab_posts.csv
-    --output_csv classification_results_real_dataset_no_rationale.csv
-    
-    RECAS
-    --model_path /lustrehome/benedettifrancescophd/models/qwen
-    --input_csv posts_nohtml_processed_0_-40k.csv
-    --labeled_posts qwen_labeled_gab_posts.csv
-    --output_csv classification_results_real_dataset_no_rationale.csv
-    
-    """
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", required=True, type=str)
     parser.add_argument("--output_dir", default="output", type=str)
@@ -316,5 +301,9 @@ if __name__ == "__main__":
                         print(f"[proc {accelerator.process_index}] Skipping post {row[POST_ID_COLUMN]} due to json error")
                         error_count = 0
 
+    df = pd.read_csv("gab_posts_labeled_qwen.csv")
+    df['exact_level_found'].value_counts().sort_index().plot(kind='pie', autopct='%1.1f%%', ylabel='')
+    plt.title('Radicalization level distribution')
+    plt.show()
     if accelerator.is_main_process:
         print("\nProcess completed.")
