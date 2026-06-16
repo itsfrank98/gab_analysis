@@ -174,8 +174,8 @@ def create_user_initial_prompt(user_id, user_n_posts, user_name, user_bio, state
                   f"incitement to violence if it fits your persona. \n"
                   f"{few_shot_part}"
                   f"OUTPUT INSTRUCTIONS: \n"
-                  "* The post must be relevant to your passions and opinions."
-                  "* Write only textual posts, without multimedia content;\n"
+                  "* The post must be relevant to your passions and opinions; "
+                  "* Write only textual posts, without multimedia content; "
                   "* The expected output is a list of posts in plain text. Feel free to use hashtags or emojis."
                   "Use them in different parts of the post. Return the posts as a list in JSON format."
                   "The expected output has the following structure: {\"response\": [\"post1\", \"post2\", ..., \"post_n\"]}\n"
@@ -551,7 +551,6 @@ if __name__ == "__main__":
          usernames_path=args.usernames_path, llm_provider=args.llm_provider, model_name=args.model_name, adapter_path=args.adapter_path,
          real_posts_text_column=args.real_posts_text_column, already_created_posts=None, type_prompt=args.type_prompt)    #args.already_created_posts
 
-# python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts.csv --create_posts --model_name DreadPoor/Irix-12B-Model_Stock --adapter_path fine_tuning/lora_Irix/final_lora_adapter
 
 # python user_creation.py --user_n_posts 10 --users_profiles_path synthetic_user_profiles.csv --output_fname synthetic_posts_added.csv --create_posts  --real_posts_path posts_processed.csv --llm_provider llama.cpp --already_created_posts synthetic_posts_irix_fewshot.csv
 

@@ -67,6 +67,7 @@ if __name__ == "__main__":
         df = df.drop(columns=[post_id_field_name]) if post_id_field_name in df.columns else df
         post_ids = arange(len(df))
         df[post_id_field_name] = post_ids
+    df = df.dropna(subset=content_field_name)
     if features_dst:
         if not features_dst.endswith(".pkl"):
             features_dst += ".pkl"
@@ -85,5 +86,5 @@ if __name__ == "__main__":
     features_dst = "bert_features_posts.pkl"
     """
 # scp -P 3391 -r  .\content_analysis\bert_encoding.py francesco@193.204.187.7:/home/francesco/gab_analysis/content_analysis/bert_encoding.py
-# python bert_encoding.py --df_src ../synthetic_dataset/synthetic_posts_irix_fewshot.csv --features_dst ../dataset/bert_features_few_shot.pkl  --user_id_field_name account_id --content_field_name posts --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl
+# python bert_encoding.py --df_src ../synthetic_dataset/OLD_posts_only_irix_no_mood/synthetic_posts_irix_fewshot.csv --features_dst ../dataset/bert_features_few_shot.pkl  --user_id_field_name account_id --content_field_name posts --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl
 # --aggregated_features_dst ../dataset/bert_features_aggregated_few_shot --add_post_id_flag

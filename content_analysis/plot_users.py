@@ -2,7 +2,7 @@
 Qui fai il plot delle features.
 Note importanti:
 - Se lo devi lanciare sul server, non lanciarlo da linea di comando perche non vedresti le immagini. Lancialo con tasto destro+run
-e cambia i path dai derfault dell'argprse
+e cambia i path dai default dell'argparse
 - Il campo 'unit' serve solo per il titolo del plot, non fa nessuna aggregazione. Se vuoi plottare gli users devi passare
 i path delle user features, se vuoi plottare i post devi passare i path ai post
 """
@@ -45,7 +45,7 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
     else:
         reduction = TSNE(n_components=dimensions)
     reduced = reduction.fit_transform(matrix)
-    dimensions =3
+
     if dimensions==2:
         plt.figure(figsize=(8, 6))
 
@@ -111,12 +111,12 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synthetic_feats_path", type=str, default="../dataset/features_bert/bert_features_few_shot_enriched.pkl")
-    parser.add_argument("--real_feats_path", type=str, default="../dataset/features_bert/bert_features_real_posts.pkl")
+    parser.add_argument("--synthetic_feats_path", type=str, default="../synthetic_dataset/bert_features/bert_features_few_shot.pkl")     #"../synthetic_dataset/bert_features_few_shot_moody_1000.pkl"
+    parser.add_argument("--real_feats_path", type=str, default="../dataset/bert_features/bert_features_real_posts.pkl")
     parser.add_argument("--consider_label", action="store_true")
     parser.add_argument("--method", type=str, default="pca")
-    parser.add_argument("--unit", type=str, default="posts")
-    parser.add_argument("--dimensions", type=int, default=3)
+    parser.add_argument("--unit", type=str, default="users")
+    parser.add_argument("--dimensions", type=int, default=2)
     args = parser.parse_args()
 
     main(synthetic_feats_path=args.synthetic_feats_path, real_feats_path=args.real_feats_path, consider_label=args.consider_label,
