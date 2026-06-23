@@ -1,46 +1,33 @@
-from transformers import DistilBertTokenizer, DistilBertModel
-from tqdm import tqdm
-import pickle
-import pandas as pd
-import torch
-import argparse
-from numpy import arange
+"""
+Requires python 3.10.6
+"""
 
+from laser_encoders import LaserEncoderPipeline
+import argparse
+import pandas as pd
+from numpy import arange
+import pickle
 
 def main(df, content_field_name, features_dst, post_id_field_name):
-    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-cased')
-    model = DistilBertModel.from_pretrained("distilbert-base-cased")
-    dct = {}
-
-    for index, row in tqdm(df.iterrows()):
-        with torch.no_grad():
-            post_text = row[content_field_name]
-            try:
-                encoded_input = tokenizer(post_text, return_tensors='pt', truncation=True)
-                output = model(**encoded_input)
-                output = output.last_hidden_state.mean(dim=1).squeeze()
-                dct[row[post_id_field_name]] = output
-            except ValueError:
-                print(post_text)
-        if index % 100 == 0:
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    encoder = LaserEncoderPipeline(lang="eng_Latn")
+    keys = df[post_id_field_name].tolist()
+    texts = df[content_field_name].tolist()
+    embeddings = encoder.encode_sentences(texts)
+    dct = dict(zip(keys, embeddings))
+    """for index, row in tqdm(df.iterrows()):
+        post_text = row[content_field_name]
+        try:
+            embedding = 
+            output = output.last_hidden_state.mean(dim=1).squeeze()
+            dct[row[post_id_field_name]] = output
+        except ValueError:
+            print(post_text)"""
 
     with open(features_dst, "wb") as f:
         pickle.dump(dct, f)
 
-def aggregate_embeddings(embs_dict, df, user_ids_set, user_id_field_name, post_id_field_name, dst):
-    new_dict = {}
-    for user_id in tqdm(user_ids_set):
-        user_posts_ids = df[df[user_id_field_name]==user_id][post_id_field_name].tolist()
-        tensors = [embs_dict[post_id] for post_id in user_posts_ids]
-        new_dict[user_id] = torch.stack(tensors).mean(dim=0)
-
-    with open(dst, "wb") as f:
-        pickle.dump(new_dict, f)
-
 
 if __name__ == "__main__":
-    ft_dst = "../dataset/features_bert/bert_features_real_comments.pkl"
     parser = argparse.ArgumentParser()
     parser.add_argument("--df_src", type=str, default="all_posts_2800_3000.csv", required=False)
     parser.add_argument("--content_field_name", type=str, default="posts", required=False)

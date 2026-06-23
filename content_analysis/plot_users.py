@@ -17,8 +17,39 @@ from sklearn.mixture import GaussianMixture
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 
+def show_extremes(values, post_ids, post_texts, is_synthetic, embedding_type, k=10, axis_name="PC1"):
+    order = np.argsort(values)
+    low_idx = order[:k]
+    high_idx = order[-k:]
 
-def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="users", dimensions=2, outlier_analysis=False):
+    print(f"=== {axis_name} LOW extreme ===")
+    c = 0
+    d = 0
+    for i in low_idx:
+        try:
+            pid = post_ids[i]
+            tag = "SYN" if is_synthetic[pid] else "REAL"
+            with open(f"{axis_name}_low_extreme_{embedding_type}.txt", "a+") as f:
+                f.write(f"[{tag}] ({values[i]:.2f}) {post_texts[pid]}\n")
+            #print(f"[{tag}] ({values[i]:.2f}) {post_texts[pid]}")
+        except IndexError:
+            c += 1
+
+    print(f"\n=== {axis_name} HIGH extreme ===")
+    for i in high_idx:
+        try:
+            pid = post_ids[i]
+            tag = "SYN" if is_synthetic[pid] else "REAL"
+            with open(f"{axis_name}_high_extreme_{embedding_type}.txt", "a+") as f:
+                f.write(f"[{tag}] ({values[i]:.2f}) {post_texts[pid]}\n")
+            #print(f"[{tag}] ({values[i]:.2f}) {post_texts[pid]}")
+        except IndexError:
+            d += 1
+    print("C=", c)
+    print("D=", d)
+
+def main(synthetic_feats_path, real_feats_path, consider_label, method, real_df_path, synthetic_df_path, embedding_type,
+         unit="users", dimensions=2, outlier_analysis=False):
     with open(synthetic_feats_path, 'rb') as f:
         synthetic_feats = pickle.load(f)
     with open(real_feats_path, 'rb') as f:
@@ -42,6 +73,21 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
 
     if method.lower()=="pca":
         reduction = PCA(n_components=dimensions)
+
+        df1 = pd.read_csv(real_df_path)[["id", "content"]]
+        df2 = pd.read_csv(synthetic_df_path)
+        df2 = df2.rename(columns={"posts": "content"})
+        df2 = df2[["id", "content"]]
+        df = pd.concat([df1, df2])
+        is_synth1 = dict(zip(df1["id"], [False] * len(df1)))
+        is_synth2 = dict(zip(df2["id"], [True] * len(df2)))
+        is_synth1.update(is_synth2)
+        post_texts = dict(zip(df["id"], df["content"]))
+        reduced = reduction.fit_transform(matrix)
+        pc1 = reduced[:, 0]
+        pc2 = reduced[:, 1]
+        show_extremes(values=pc1, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC1", k=100, embedding_type=embedding_type)
+        show_extremes(values=pc2, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC2", k=100, embedding_type=embedding_type)
     else:
         reduction = TSNE(n_components=dimensions)
     reduced = reduction.fit_transform(matrix)
@@ -53,11 +99,15 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
             n_safe = safe_matrix.shape[0]
             n_risky = risky_matrix.shape[0]
             plt.scatter(reduced[:n_safe, 0], reduced[:n_safe, 1], color='green', alpha=.3, s=10, label='safe')
-            plt.scatter(reduced[n_safe:n_safe+n_risky, 0], reduced[n_safe:n_safe+n_risky, 1], color='orange', alpha=.3, s=10, label='risky')
-            plt.scatter(reduced[n_safe+n_risky:, 0], reduced[n_safe+n_risky:, 1], color='red', alpha=.3, s=10, label='synthetic')
+            plt.scatter(reduced[n_safe:n_safe+n_risky, 0], reduced[n_safe:n_safe+n_risky, 1], color='orange', alpha=.1, s=10, label='risky')
+            plt.scatter(reduced[n_safe+n_risky:, 0], reduced[n_safe+n_risky:, 1], color='red', alpha=.1, s=10, label='synthetic')
         else:
-            plt.scatter(reduced[:len(real_feats), 0], reduced[:len(real_feats), 1], color='blue', alpha=.3, s=10, label='real')
-            plt.scatter(reduced[len(real_feats):, 0], reduced[len(real_feats):, 1], color='red', alpha=.3, s=10, label='synthetic')
+            #plt.scatter(reduced[:len(real_feats), 0], reduced[:len(real_feats), 1], color='blue', alpha=.6, s=10, label='real')
+            #plt.scatter(reduced[len(real_feats):, 0], reduced[len(real_feats):, 1], color='red', alpha=.3, s=10, label='synthetic')
+            plt.scatter(reduced[:len(real_feats), 0], reduced[:len(real_feats), 1], facecolors='none', edgecolors='blue',
+                        s=10, label='real', alpha=.1)
+            plt.scatter(reduced[len(real_feats):, 0], reduced[len(real_feats):, 1], facecolors='none', edgecolors='red',
+                        s=10, label='synthetic', alpha=.1)
 
         plt.legend()
         plt.xlabel(f'{method}1')
@@ -74,19 +124,20 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
             y=reduced[:len(real_feats), 1],
             z=reduced[:len(real_feats), 2],
             mode='markers',
-            marker=dict(color='blue', opacity=0.3, size=3),
-            name='real'
+            marker=dict(color='blue', opacity=0.1, size=2),
+            name='real',
         ))
-
         fig.add_trace(go.Scatter3d(
             x=reduced[len(real_feats):, 0],
             y=reduced[len(real_feats):, 1],
             z=reduced[len(real_feats):, 2],
             mode='markers',
-            marker=dict(color='red', opacity=0.3, size=3),
+            marker=dict(color='red', opacity=0.1, size=2),
             name='synthetic'
         ))
-        fig.write_html('plot.html')
+
+
+        fig.write_html(f'plot_blue_red_{embedding_type}.html')
 
     if outlier_analysis:
         X_blue = matrix[:len(real_feats)]
@@ -111,13 +162,18 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, unit="us
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synthetic_feats_path", type=str, default="../synthetic_dataset/bert_features/bert_features_few_shot.pkl")     #"../synthetic_dataset/bert_features_few_shot_moody_1000.pkl"
-    parser.add_argument("--real_feats_path", type=str, default="../dataset/bert_features/bert_features_real_posts.pkl")
+    parser.add_argument("--synthetic_feats_path", type=str, default="features_merged_sonar.pkl")     #"../synthetic_dataset/bert_features_few_shot_moody_1000.pkl"
+    parser.add_argument("--real_feats_path", type=str, default="../dataset/features/sonar_features.pkl")
+    parser.add_argument("--synthetic_df_path", type=str, default="merged_id.csv")
+    parser.add_argument("--real_df_path", type=str, default="../synthetic_dataset/gab_posts_labeled_qwen.csv")
     parser.add_argument("--consider_label", action="store_true")
     parser.add_argument("--method", type=str, default="pca")
     parser.add_argument("--unit", type=str, default="users")
     parser.add_argument("--dimensions", type=int, default=2)
+    parser.add_argument("--embedding_type", type=str, default="sonar")
     args = parser.parse_args()
 
-    main(synthetic_feats_path=args.synthetic_feats_path, real_feats_path=args.real_feats_path, consider_label=args.consider_label,
-         method=args.method, unit=args.unit, dimensions=args.dimensions, outlier_analysis=False)
+    main(synthetic_feats_path=args.synthetic_feats_path, real_feats_path=args.real_feats_path,
+         consider_label=args.consider_label, method=args.method, unit=args.unit, dimensions=args.dimensions,
+         outlier_analysis=False, real_df_path=args.real_df_path, synthetic_df_path=args.synthetic_df_path,
+         embedding_type=args.embedding_type)
