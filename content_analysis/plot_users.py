@@ -54,7 +54,7 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, real_df_
         synthetic_feats = pickle.load(f)
     with open(real_feats_path, 'rb') as f:
         real_feats = pickle.load(f)
-    print(len(real_feats), len(synthetic_feats))
+    print(f"Real features: {len(real_feats)}, Synthetic features: {len(synthetic_feats)}")
 
     synthetic_matrix = np.array([v for v in synthetic_feats.values()])
 
@@ -69,7 +69,8 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, real_df_
         labels = ["safe"] * safe_matrix.shape[0] + ["risky"] * risky_matrix.shape[0] + ["synthetic"] * len(synthetic_feats)
     else:
         real_matrix = np.array([v for v in real_feats.values()])
-        matrix = np.vstack((real_matrix, synthetic_matrix))
+        #matrix = np.vstack((real_matrix, synthetic_matrix))
+        matrix = real_matrix
 
     if method.lower()=="pca":
         reduction = PCA(n_components=dimensions)
@@ -83,31 +84,31 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, real_df_
         is_synth2 = dict(zip(df2["id"], [True] * len(df2)))
         is_synth1.update(is_synth2)
         post_texts = dict(zip(df["id"], df["content"]))
-        reduced = reduction.fit_transform(matrix)
-        pc1 = reduced[:, 0]
-        pc2 = reduced[:, 1]
-        show_extremes(values=pc1, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC1", k=100, embedding_type=embedding_type)
-        show_extremes(values=pc2, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC2", k=100, embedding_type=embedding_type)
+
+        #pc1 = reduced_real[:, 0]
+        #pc2 = reduced_real[:, 1]
+        #show_extremes(values=pc1, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC1", k=100, embedding_type=embedding_type)
+        #show_extremes(values=pc2, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC2", k=100, embedding_type=embedding_type)
     else:
         reduction = TSNE(n_components=dimensions)
-    reduced = reduction.fit_transform(matrix)
+    reduced_real = reduction.fit_transform(matrix)
+    reduced_synthetic = reduction.transform(synthetic_matrix)
 
     if dimensions==2:
         plt.figure(figsize=(8, 6))
-
         if consider_label:
             n_safe = safe_matrix.shape[0]
             n_risky = risky_matrix.shape[0]
-            plt.scatter(reduced[:n_safe, 0], reduced[:n_safe, 1], color='green', alpha=.3, s=10, label='safe')
-            plt.scatter(reduced[n_safe:n_safe+n_risky, 0], reduced[n_safe:n_safe+n_risky, 1], color='orange', alpha=.1, s=10, label='risky')
-            plt.scatter(reduced[n_safe+n_risky:, 0], reduced[n_safe+n_risky:, 1], color='red', alpha=.1, s=10, label='synthetic')
+            plt.scatter(reduced_real[:n_safe, 0], reduced_real[:n_safe, 1], color='green', alpha=.3, s=10, label='safe')
+            plt.scatter(reduced_real[n_safe:n_safe+n_risky, 0], reduced_real[n_safe:n_safe+n_risky, 1], color='orange',
+                        alpha=.1, s=10, label='risky')
+            plt.scatter(reduced_synthetic[:, 0], reduced_synthetic[:, 1], color='red', alpha=.1, s=10, label='synthetic')
         else:
-            #plt.scatter(reduced[:len(real_feats), 0], reduced[:len(real_feats), 1], color='blue', alpha=.6, s=10, label='real')
-            #plt.scatter(reduced[len(real_feats):, 0], reduced[len(real_feats):, 1], color='red', alpha=.3, s=10, label='synthetic')
-            plt.scatter(reduced[:len(real_feats), 0], reduced[:len(real_feats), 1], facecolors='none', edgecolors='blue',
-                        s=10, label='real', alpha=.1)
-            plt.scatter(reduced[len(real_feats):, 0], reduced[len(real_feats):, 1], facecolors='none', edgecolors='red',
+            plt.scatter(reduced_real[:, 0], reduced_real[:, 1], facecolors='none', edgecolors='blue', s=10, label='real',
+                        alpha=.1)
+            plt.scatter(reduced_synthetic[:, 0], reduced_synthetic[:, 1], facecolors='none', edgecolors='red',
                         s=10, label='synthetic', alpha=.1)
+
 
         plt.legend()
         plt.xlabel(f'{method}1')
@@ -120,17 +121,17 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, real_df_
         fig = go.Figure()
 
         fig.add_trace(go.Scatter3d(
-            x=reduced[:len(real_feats), 0],
-            y=reduced[:len(real_feats), 1],
-            z=reduced[:len(real_feats), 2],
+            x=reduced_real[:, 0],
+            y=reduced_real[:, 1],
+            z=reduced_real[:, 2],
             mode='markers',
             marker=dict(color='blue', opacity=0.1, size=2),
             name='real',
         ))
         fig.add_trace(go.Scatter3d(
-            x=reduced[len(real_feats):, 0],
-            y=reduced[len(real_feats):, 1],
-            z=reduced[len(real_feats):, 2],
+            x=reduced_synthetic[:, 0],
+            y=reduced_synthetic[:, 1],
+            z=reduced_synthetic[:, 2],
             mode='markers',
             marker=dict(color='red', opacity=0.1, size=2),
             name='synthetic'
@@ -162,13 +163,13 @@ def main(synthetic_feats_path, real_feats_path, consider_label, method, real_df_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synthetic_feats_path", type=str, default="features_merged_sonar.pkl")     #"../synthetic_dataset/bert_features_few_shot_moody_1000.pkl"
-    parser.add_argument("--real_feats_path", type=str, default="../dataset/features/sonar_features.pkl")
+    parser.add_argument("--synthetic_feats_path", type=str, default="features_sonar_synthetic.pkl")     #"../synthetic_dataset/bert_features_few_shot_moody_1000.pkl"
+    parser.add_argument("--real_feats_path", type=str, default="../dataset/features/features_sonar_real.pkl")
     parser.add_argument("--synthetic_df_path", type=str, default="merged_id.csv")
     parser.add_argument("--real_df_path", type=str, default="../synthetic_dataset/gab_posts_labeled_qwen.csv")
-    parser.add_argument("--consider_label", action="store_true")
+    parser.add_argument("--consider_label", action="store_true", default=False)
     parser.add_argument("--method", type=str, default="pca")
-    parser.add_argument("--unit", type=str, default="users")
+    parser.add_argument("--unit", type=str, default="posts")
     parser.add_argument("--dimensions", type=int, default=2)
     parser.add_argument("--embedding_type", type=str, default="sonar")
     args = parser.parse_args()
