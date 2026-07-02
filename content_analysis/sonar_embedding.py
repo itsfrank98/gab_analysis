@@ -14,14 +14,6 @@ def main(df, content_field_name, features_dst, post_id_field_name):
     texts = df[content_field_name].tolist()
     embeddings = encoder.encode_sentences(texts)
     dct = dict(zip(keys, embeddings))
-    """for index, row in tqdm(df.iterrows()):
-        post_text = row[content_field_name]
-        try:
-            embedding = 
-            output = output.last_hidden_state.mean(dim=1).squeeze()
-            dct[row[post_id_field_name]] = output
-        except ValueError:
-            print(post_text)"""
 
     with open(features_dst, "wb") as f:
         pickle.dump(dct, f)
@@ -74,6 +66,3 @@ if __name__ == "__main__":
     content_field_name = "content"
     features_dst = "bert_features_posts.pkl"
     """
-# scp -P 3391 -r  .\content_analysis\bert_encoding.py francesco@193.204.187.7:/home/francesco/gab_analysis/content_analysis/bert_encoding.py
-# python bert_encoding.py --df_src ../synthetic_dataset/OLD_posts_only_irix_no_mood/synthetic_posts_irix_fewshot.csv --features_dst ../dataset/bert_features_few_shot.pkl  --user_id_field_name account_id --content_field_name posts --non_aggregated_embs_src ../dataset/bert_features_few_shot.pkl
-# --aggregated_features_dst ../dataset/bert_features_aggregated_few_shot --add_post_id_flag
