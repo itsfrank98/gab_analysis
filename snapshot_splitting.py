@@ -100,18 +100,6 @@ def compute_statistics(csv_path):
     print(len(newunion))
     print("\n")
 
-    vals = {
-        "until 2021": until_21_l,
-        #"2021": on_21_l,
-        "2022": on_22_l,
-        "2023": on_23_l,
-        "2024": on_24_l,
-        "Jan-Jul 25": janjul25_len,
-        "Jul 25 -": jul25_len,
-        "Valid": valid_len,
-        "Test": test_len,
-    }
-
     vals_progressive = {
         "until 2021": until_21_l,
         "2022": on_22_l+until_21_l,
