@@ -1,5 +1,6 @@
 """
-In questo file creiamo i csv necessari per lanciare tgn. Al momento le interazioni gestite sono follow, authorship, comment, user evolution. Se vuoi considerare un altro
+In questo file creiamo i csv necessari per lanciare tgn. Al momento le interazioni gestite sono follow, authorship,
+comment, user evolution. Se vuoi considerare un altro
 tipo di interazione devi prima creare i file negli snapshot, e poi implementare qui la gestione di quell'interazione
 
 IMPORTANTE:
@@ -45,7 +46,7 @@ def tensor_creation(post_features, mapping, dfs):
             tensor[i:, mapping[u], :] = avg
     return tensor
 
-def interaction_authorship_dataset_creation(src, content_features, type_interaction, df_name: str):
+def interaction_authorship_dataset_creation(src, content_features, type_interaction, df_name):
     """
     This method manages the 'author' relation between a user and some content. The possible authorship types are 2:
      1) user writes a comment: source is the user ID, target is the ID of the post that the user is commenting;
@@ -73,9 +74,10 @@ def interaction_authorship_dataset_creation(src, content_features, type_interact
     return pd.DataFrame(ld)
 
 def interaction_follow_dataset_creation(src, features, full_users_set, mapping, df_name="posts_incremental.csv",
-                                        shuffle_until=None, reset_network=False):
+                                        shuffle_until=None, reset_network=False, initialize_users_snap_0=True):
     """
     reset_network: set to true when you are in the baseline case, where we don't consider the temporal correlation of the data
+    initialize_users_snap_0: set it to true if you want all the users in the dataset to be initialized as zero vectors in the first snapshot
     """
     ld = []
     network_so_far = set()
@@ -96,7 +98,7 @@ def interaction_follow_dataset_creation(src, features, full_users_set, mapping, 
 
     for i, d in tqdm(enumerate(dirs)):
         df_incremental = pd.read_csv(os.path.join(src, d, df_name))
-        network = set(read_edg_file(os.path.join(src, d, "social_network.edg"), type_pairs=tuple))
+        network = set(read_edg_file(os.path.join(src, d, "social_network.edg"), type_pairs="tuple"))
         if reset_network:
             edges_to_add = network
         else:
@@ -109,7 +111,7 @@ def interaction_follow_dataset_creation(src, features, full_users_set, mapping, 
             avg = torch.stack(posts_features).mean(dim=0).numpy()
             ld.append({"follower_id": mapping[u], "followed_id": mapping[u], "timestamp": i, "state_label": 0,
                        "comma_separated_list_of_features": ",".join(str(e) for e in avg), "type_interaction": 1})
-        if i == 0:
+        if initialize_users_snap_0 and i == 0:
             users_not_in_first_snap = list(full_users_set - set(users_so_far))
             for u in users_not_in_first_snap:
                 ld.append({"follower_id": mapping[u], "followed_id": mapping[u], "timestamp": 0, "state_label": 0,
@@ -130,28 +132,26 @@ if __name__ == "__main__":
     CREATE_INTERACTION_DF = True
     RESET_NETWORK = False
     SHUFFLE_UNTIL = None  # -3 Se settato a none non fa lo shuffling temporale (snapshot ordinati in maniera casuale)
-    CREATE_SYNTHETIC_SNAPSHOTS = 5      # setta questa variabile al unmero di snapshot che vuoi creare, oppure settala a 0
+    CREATE_SYNTHETIC_SNAPSHOTS = 0  #5      # setta questa variabile al unmero di snapshot che vuoi creare, oppure settala a 0
     BASE = "dataset"
 
     # BERT FEATURES PATHS
-    BERT_FEATURES_REAL_POSTS_SRC = os.path.join(BASE, "features_bert/bert_features_real_posts.pkl")
-    BERT_FEATURES_REAL_COMMENTS_SRC = os.path.join(BASE, "features_bert/bert_features_real_comments.pkl")
-    BERT_FEATURES_SYNTHETIC_SRC = os.path.join(BASE, "features_bert/bert_features_few_shot_enriched.pkl")
-
+    BERT_FEATURES_REAL_POSTS_SRC = os.path.join(BASE, "features/bert_features/bert_features_real_posts.pkl")
+    BERT_FEATURES_REAL_COMMENTS_SRC = os.path.join(BASE, "features/bert_features/bert_features_real_comments.pkl")
+    BERT_FEATURES_SYNTHETIC_SRC = os.path.join(BASE, "features/bert_features/bert_features_few_shot_enriched.pkl")
 
     df_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv"]
     processed_contents_src = ["comments_only_posting_users.csv", "posts_processed.csv"]
+    MAP_SRC = "files_for_tgn/mapping.pkl"  # "mapping_baseline.pkl"
+    INV_MAP_SRC = "files_for_tgn/inv_mapping.pkl"  # "inv_mapping_baseline.pkl"
+    SYNTHETIC_POSTS_SRC = os.path.join(BASE, "synthetic_posts_irix_fewshot_enriched.csv")
+
+    SNAPSHOT_SRC = os.path.join(BASE, "files_for_tgn", "snapshots_30_06")        # "baseline"
+    CONTENT_PROCESSED_SRC = os.path.join(BASE, processed_contents_src[1])
+    OUTPUT_GAB_DF_NAME = "gab_posts_no_zero_snap0"
 
     df_name = df_names[1]
 
-    SNAPSHOT_SRC = os.path.join(BASE, "files_for_tgn/snapshots")        # "baseline"
-    CONTENT_PROCESSED_SRC = os.path.join(BASE, processed_contents_src[1])
-    OUTPUT_GAB_DF_NAME = "gab_posts"
-
-    synthetic_posts_src = os.path.join(BASE, "synthetic_posts_irix_fewshot_enriched.csv")
-
-    MAP_SRC = "files_for_tgn/mapping.pkl"    # "mapping_baseline.pkl"
-    INV_MAP_SRC ="files_for_tgn/inv_mapping.pkl"  # "inv_mapping_baseline.pkl"
 
     if not os.path.exists(os.path.join(BASE, INV_MAP_SRC)):
         create_mapping(dst_inv_mapping=os.path.join(BASE, INV_MAP_SRC), dst_mapping=os.path.join(BASE, MAP_SRC),
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     mapping = load_from_pickle(os.path.join(BASE, MAP_SRC))
 
     if CREATE_SYNTHETIC_SNAPSHOTS > 0:
-        synthetic_posts = pd.read_csv(synthetic_posts_src)
+        synthetic_posts = pd.read_csv(SYNTHETIC_POSTS_SRC)
         shuffled = synthetic_posts.sample(frac=1).reset_index(drop=True)
         chunk_size = len(synthetic_posts)//CREATE_SYNTHETIC_SNAPSHOTS
         dfs = [shuffled.iloc[i * chunk_size:(i + 1) * chunk_size] for i in range(CREATE_SYNTHETIC_SNAPSHOTS)]
@@ -182,15 +182,15 @@ if __name__ == "__main__":
             features = load_from_pickle(BERT_FEATURES_REAL_POSTS_SRC)
 
         # gestisce il follow e l'evoluzione degli utenti da uno snapshot all'altro
-        df = interaction_follow_dataset_creation(src=SNAPSHOT_SRC, features=features,
-                                                 full_users_set=users,
+        df = interaction_follow_dataset_creation(src=SNAPSHOT_SRC, features=features, full_users_set=users,
                                                  mapping=mapping, df_name=df_name, shuffle_until=SHUFFLE_UNTIL,
-                                                 reset_network=RESET_NETWORK)
+                                                 reset_network=RESET_NETWORK, initialize_users_snap_0=False)
 
         # TODO la riga commentata sotto è per l'estensione, in cui consideriamo i commenti e le relazioni utente --writes--> post
         #df = interaction_authorship_dataset_creation(src=SNAPSHOT_SRC, content_features=features, df_name=df_name, type_interaction=interaction_type)
+        #df.to_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"), index=False)
+        df.to_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".tsv"), sep="\t", quoting=3, escapechar="\\", index=False)
 
-        df.to_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))
     # branch that manages the synthetic dataset
     if CONSIDER_SYNTHETIC:
         df = pd.read_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + ".csv"))

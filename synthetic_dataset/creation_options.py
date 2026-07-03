@@ -2,8 +2,8 @@
 
 political_leanings = {"far_left": .01, "left": .01, "center": .005, "right": .2, "far_right": .52, "non_political": .215, "unknown": .04}
 
-#posts_levels = {"level_0": .61, "level_1": .15, "level_2": .19, "level_3": .01, "level_4": .03, "level_5": .01}
-posts_levels = {0: .0, 1: .0, 2: .0, 3: .0, 4: .5, 5: .5}
+posts_levels = {0: .61, 1: .15, 2: .19, 3: .01, 4: .03, 5: .01}
+#posts_levels = {0: .0, 1: .0, 2: .0, 3: .0, 4: .5, 5: .5}
 interests = ["basketball", "football", "tennis", "american football", "rugby", "golf", "athletics", "reading books",
              "sports", "travel", "cook", "fitness", "gardening", "politics", "technology", "self improvement",
              "history", "science", "animals", "country music", "rap music", "classical music", "pop music",

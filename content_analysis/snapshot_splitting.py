@@ -41,14 +41,6 @@ def compute_statistics(csv_path):
     until_21_l = len(union)
     print("\n")
 
-    """print("2021: \n")
-    print(f"Posts: {len(df[df['timestamp'].dt.year==2021])}")
-    print(f"Users: {len(y21)}")
-    newunion = union.union(y21)
-    on_21_l = len(newunion) - len(union)
-    print(f"New users wrt previous: {len(newunion) - len(union)}")
-    print("\n")"""
-
     print("2022: \n")
     print(f"Posts: {len(df[df['timestamp'].dt.year==2022])}")
     print(f"Users: {len(y22)}")
@@ -135,13 +127,13 @@ def compute_statistics(csv_path):
 
 SHUFFLE = False
 content_srcs = ["../dataset/comments_only_posting_users.csv", "../dataset/posts_processed.csv"]
-csv_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv", "comments_incremental.csv", "posts_incremental.csv"]
 posts_src =  content_srcs[1]
-network_src = None # "../dataset/social_network.edg"
-
-dst = "../dataset/snapshots"
+csv_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv", "comments_incremental.csv", "posts_incremental.csv"]
 csv_name = csv_names[1]       # name to use when saving the csv in the snapshots
 incremental_csv_name = csv_names[3]  #
+
+network_src = "../dataset/social_network.edg"
+dst = "../dataset/files_for_tgn/snapshots_30_06"
 timestamp_field = "created_at"
 account_id_field = "account_id"
 
@@ -182,8 +174,7 @@ posts_df = posts_df.drop(columns=[c for c in posts_df.columns if c.startswith("U
 
 previous_users = set()
 previous_snapshot_posts = pd.DataFrame()
-if network_src:
-    network_edges = set(read_edg_file(network_src, type_pairs="tuple"))
+
 for snapshot_name, (start_year, start_month, start_day, end_year, end_month, end_day) in snapshots.items():
     start_date = pd.Timestamp(start_year, start_month, start_day, tz="UTC")
     end_date = pd.Timestamp(end_year, end_month, end_day, tz="UTC")
@@ -203,9 +194,9 @@ for snapshot_name, (start_year, start_month, start_day, end_year, end_month, end
     print(len(posts_incremental))
 
     if network_src:
+        network_edges = set(read_edg_file(network_src, type_pairs="tuple"))
         edgelist_current_snapshot = []
         for ed in network_edges:
             if int(ed[0]) in users and int(ed[1]) in users:
                 edgelist_current_snapshot.append((ed[0], ed[1]))
         write_edg_file(edgelist_current_snapshot, os.path.join(dst, snapshot_name, "social_network.edg"))
-

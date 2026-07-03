@@ -53,13 +53,16 @@ def manage_labeled(unit, features, df):
         key = "user_id"
     safe = df[df["binary_label"] == 0][key].tolist()
     risky = df[df["binary_label"] == 1][key].tolist()
-    safe_matrix = np.array([features[k] for k in list(features.keys()) if k in safe])
-    risky_matrix = np.array([features[k] for k in list(features.keys()) if k in risky])
+    safe = set(safe) & set(list(features.keys()))
+    risky = set(risky) & set(list(features.keys()))
+    safe_matrix = np.array([features[k] for k in safe])
+    risky_matrix = np.array([features[k] for k in risky])
     return safe_matrix, risky_matrix
 
 
 def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_df_path, embedding_type, unit="users",
-         dimensions=2, labeled_synthetic_posts_path=None, labeled_real_posts_path=None):
+         dimensions=2, random_sampling=False, labeled_synthetic_posts_path=None, labeled_real_posts_path=None,
+         plot_safe=True, plot_risky=True):
     with open(synthetic_feats_path, 'rb') as f:
         synthetic_feats = pickle.load(f)
     with open(real_feats_path, 'rb') as f:
@@ -75,12 +78,8 @@ def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_
                                                                        df=labeled_synthetic_posts)
         safe_real_matrix, risky_real_matrix = manage_labeled(unit=unit, features=real_feats,
                                                                        df=labeled_real_posts)
-        matrix = np.vstack((safe_real_matrix, risky_real_matrix, safe_synthetic_matrix, risky_synthetic_matrix))
-        colors = (["green"] * safe_real_matrix.shape[0] + ["orange"] * risky_real_matrix.shape[0] + ["blue"] *
-                  safe_synthetic_matrix.shape[0] + ["yellow"] * risky_synthetic_matrix.shape[0])
-        #labels = ["safe"] * safe_real_matrix.shape[0] + ["risky"] * risky_real_matrix.shape[0] + ["synthetic"] * len(synthetic_feats)
-        labels = (["safe"] * safe_real_matrix.shape[0] + ["risky"] * risky_real_matrix.shape[0] +
-                  ["safe"] * safe_synthetic_matrix.shape[0] + ["risky"] * risky_synthetic_matrix.shape[0])
+        matrix = np.vstack((safe_real_matrix, risky_real_matrix))
+
     else:
         real_matrix = np.array([v for v in real_feats.values()])
         matrix = real_matrix
@@ -104,23 +103,28 @@ def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_
     else:
         reduction = TSNE(n_components=dimensions)
     reduction.fit(matrix)
-    mat_2_see = matrix[np.random.choice(matrix.shape[0], synthetic_matrix.shape[0], replace=False)]
+    # The random sampling is only made on the real posts, which are more than the synthetic ones. We take a sample of the same size of the synthetic dataset
+    if random_sampling:
+        mat_2_see = matrix[np.random.choice(matrix.shape[0], synthetic_matrix.shape[0], replace=False)]
+    else:
+        mat_2_see = matrix
     reduced_real = reduction.transform(mat_2_see)
     reduced_synthetic = reduction.transform(synthetic_matrix)
 
     if dimensions==2:
         plt.figure(figsize=(8, 6))
-        if labeled_synthetic_posts_path:
-            n_safe_real, n_risky_real = safe_synthetic_matrix.shape[0], risky_real_matrix.shape[0]
-            plt.scatter(reduced_real[:n_safe_real, 0], reduced_real[:n_safe_real, 1], color='green', alpha=.1, s=10, label='safe_real')
-            plt.scatter(reduced_real[n_safe_real:, 0], reduced_real[n_safe_real:, 1], color='red',
-                        alpha=.1, s=10, label='risky_real')
-            if labeled_real_posts_path:
+        if labeled_real_posts_path:
+            n_safe_real, n_risky_real = safe_real_matrix.shape[0], risky_real_matrix.shape[0]
+            if plot_safe:
+                plt.scatter(reduced_real[:n_safe_real, 0], reduced_real[:n_safe_real, 1], color='green', alpha=.1, s=10, label='safe_real')
+            if plot_risky:
+                plt.scatter(reduced_real[n_safe_real:, 0], reduced_real[n_safe_real:, 1], color='red', alpha=.1, s=10, label='risky_real')
+            if labeled_synthetic_posts_path:
                 n_safe_synth, n_risky_synth = safe_synthetic_matrix.shape[0], risky_synthetic_matrix.shape[0]
-                plt.scatter(reduced_synthetic[:n_safe_synth, 0], reduced_synthetic[:n_safe_synth, 1], color='blue', alpha=.3, s=10,
-                            label='safe_synthetic')
-                plt.scatter(reduced_synthetic[n_safe_synth:, 0], reduced_synthetic[n_safe_synth:, 1], color='orange',
-                            alpha=.1, s=10, label='risky_synthetic')
+                if plot_safe:
+                    plt.scatter(reduced_synthetic[:n_safe_synth, 0], reduced_synthetic[:n_safe_synth, 1], color='blue', alpha=.3, s=10, label='safe_synthetic')
+                if plot_risky:
+                    plt.scatter(reduced_synthetic[n_safe_synth:, 0], reduced_synthetic[n_safe_synth:, 1], color='orange', alpha=.1, s=10, label='risky_synthetic')
             else:
                 plt.scatter(reduced_synthetic[:, 0], reduced_synthetic[:, 1], color='red', alpha=.1, s=10, label='synthetic')
         else:
@@ -128,7 +132,6 @@ def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_
                         alpha=.1)
             plt.scatter(reduced_synthetic[:, 0], reduced_synthetic[:, 1], facecolors='none', edgecolors='red',
                         s=10, label='synthetic', alpha=.1)
-
 
         plt.legend()
         plt.xlabel(f'{method}1')
@@ -163,21 +166,23 @@ def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synthetic_feats_path", type=str, default="../synthetic_dataset/features/features_sonar_synthetic.pkl")     #"../synthetic_dataset/features/bert_features/bert_features_synthetic_moody_posts_10k.pkl"
+    parser.add_argument("--synthetic_feats_path", type=str, default="../synthetic_dataset/features/features_sonar_synthetic_10k.pkl")     #"../synthetic_dataset/features/bert_features/bert_features_synthetic_moody_posts_10k.pkl"
     parser.add_argument("--real_feats_path", type=str, default="../dataset/features/features_sonar_real.pkl")   # "../dataset/features/bert_features/bert_features_real_posts.pkl"
     parser.add_argument("--synthetic_df_path", type=str, default="merged_id.csv")
     parser.add_argument("--real_df_path", type=str, default="../dataset/gab_posts_labeled_qwen.csv")
-    parser.add_argument("--consider_label", action="store_true", default=False)
     parser.add_argument("--method", type=str, default="pca")
     parser.add_argument("--unit", type=str, default="posts")
     parser.add_argument("--dimensions", type=int, default=2)
     parser.add_argument("--embedding_type", type=str, default="sonar")
-    parser.add_argument("--labeled_real_posts_path", type=str, default=None)
-    parser.add_argument("--labeled_synthetic_posts_path", type=str, default=None)
-
+    parser.add_argument("--labeled_real_posts_path", type=str, default="../dataset/gab_posts_labeled_qwen.csv")
+    parser.add_argument("--labeled_synthetic_posts_path", type=str, default="../synthetic_dataset/synthetic_posts/synthetic_posts_labeled.csv")
+    parser.add_argument("--random_sampling", action="store_true", default=False, help="Set it to true if you want to randomly sample from the real dataset")
+    parser.add_argument("--plot_safe", action="store_true", default=True)
+    parser.add_argument("--plot_risky", action="store_true", default=True)
     args = parser.parse_args()
 
     main(synthetic_feats_path=args.synthetic_feats_path, real_feats_path=args.real_feats_path,
-         labeled_synthetic_posts_path=args.consider_label, method=args.method, unit=args.unit, dimensions=args.dimensions,
-          real_df_path=args.real_df_path, synthetic_df_path=args.synthetic_df_path,
-         embedding_type=args.embedding_type)
+         synthetic_df_path=args.synthetic_df_path, real_df_path=args.real_df_path, method=args.method, unit=args.unit,
+         dimensions=args.dimensions, embedding_type=args.embedding_type, labeled_real_posts_path=args.labeled_real_posts_path,
+         labeled_synthetic_posts_path=args.labeled_synthetic_posts_path, random_sampling=args.random_sampling,
+         plot_safe=args.plot_safe, plot_risky=args.plot_risky)
