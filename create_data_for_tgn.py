@@ -28,20 +28,6 @@ def create_mapping(dst_mapping, src, synthetic_batches_src=None):
     mapping = {users[v]: v for v in range(len(users))}
     save_to_pickle(dst_mapping, mapping)
 
-def tensor_creation(post_features, mapping, dfs):
-    tensor = np.zeros((len(dfs), len(mapping), 768))
-    for i, df in tqdm(enumerate(dfs)):
-        if i <= 5:
-            features = post_features[0]
-        else:
-            features = post_features[1]
-        users_so_far = list(set(df["account_id"].tolist()))
-        for u in users_so_far:
-            posts_by_user = df[df["account_id"] == u]["id"].tolist()
-            posts_features = [features[i] for i in posts_by_user]
-            avg = torch.stack(posts_features).mean(dim=0).numpy()
-            tensor[i:, mapping[u], :] = avg
-    return tensor
 
 def interaction_authorship_dataset_creation(src, content_features, type_interaction, df_name):
     """
@@ -124,12 +110,11 @@ def interaction_follow_dataset_creation(src, features, full_users_set, mapping, 
 
 
 if __name__ == "__main__":
-    CREATE_TENSOR = False
     CONSIDER_SYNTHETIC = True
     CREATE_INTERACTION_DF = True
     RESET_NETWORK = False
     SHUFFLE_UNTIL = None  # -3 Se settato a none non fa lo shuffling temporale (snapshot ordinati in maniera casuale)
-    CREATE_SYNTHETIC_SNAPSHOTS = 0  # setta questa variabile al numero di snapshot che vuoi creare, oppure settala a 0
+    CREATE_SYNTHETIC_SNAPSHOTS = 3  # setta questa variabile al numero di snapshot che vuoi creare, oppure settala a 0
     INITIALIZE_USERS_SNAP_0 = False
     REAL_DATASET_DIR = "dataset"
     SYNTHETIC_DATASET_DIR = "synthetic_dataset"
@@ -144,7 +129,7 @@ if __name__ == "__main__":
     df_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv"]
     processed_contents_src = ["comments_only_posting_users.csv", "posts_processed.csv"]
     MAPPING_NAME = "mapping.pkl"  # "mapping_baseline.pkl"
-    SYNTHETIC_POSTS_SRC = os.path.join(SYNTHETIC_DATASET_DIR, "synthetic_posts_10k_final.csv")
+    SYNTHETIC_POSTS_SRC = os.path.join(SYNTHETIC_DATASET_DIR, "synthetic_posts", "synthetic_posts_10k_final.tsv")
 
     SNAPSHOT_SRC = os.path.join(REAL_DATASET_DIR, "files_for_tgn", "snapshots_30_06")        # "baseline"
     CONTENT_PROCESSED_SRC = os.path.join(REAL_DATASET_DIR, processed_contents_src[1])
@@ -158,7 +143,7 @@ if __name__ == "__main__":
     mapping = load_from_pickle(os.path.join(SNAPSHOT_SRC, MAPPING_NAME))
 
     if CREATE_SYNTHETIC_SNAPSHOTS > 0:
-        synthetic_posts = pd.read_csv(SYNTHETIC_POSTS_SRC)
+        synthetic_posts = pd.read_csv(SYNTHETIC_POSTS_SRC, sep="\t", quoting=3, escapechar="\\")
         shuffled = synthetic_posts.sample(frac=1).reset_index(drop=True)
         chunk_size = len(synthetic_posts)//CREATE_SYNTHETIC_SNAPSHOTS
         dfs = [shuffled.iloc[i * chunk_size:(i + 1) * chunk_size] for i in range(CREATE_SYNTHETIC_SNAPSHOTS)]
@@ -226,17 +211,3 @@ if __name__ == "__main__":
         df_synth = pd.DataFrame(ld)
         final_df = pd.concat([df, df_synth]).sort_values(by=["timestamp"])
         final_df.to_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + "_with_synthetic.tsv"), sep="\t", quoting=3, escapechar="\\", index=False)
-
-    if CREATE_TENSOR:
-        dfs_l = []
-        for d in os.listdir(REAL_DATASET_DIR):
-            if d == "synthetic":
-                dfs_l.append(pd.read_csv(os.path.join(REAL_DATASET_DIR, d, "batch1_synthetic.csv")))
-                dfs_l.append(pd.read_csv(os.path.join(REAL_DATASET_DIR, d, "batch2_synthetic.csv")))
-                dfs_l.append(pd.read_csv(os.path.join(REAL_DATASET_DIR, d, "batch3_synthetic.csv")))
-            elif os.path.isdir(os.path.join(REAL_DATASET_DIR, d)):
-                dfs_l.append(pd.read_csv(os.path.join(REAL_DATASET_DIR, d, "posts_incremental.csv")))
-        real_post_features = load_from_pickle(os.path.join(REAL_DATASET_DIR, "bert_features_real_posts.pkl"))
-        synthetic_post_features = load_from_pickle(os.path.join(REAL_DATASET_DIR, "bert_features_synthetic.pkl"))
-        tensor = tensor_creation([real_post_features, synthetic_post_features], mapping, dfs_l)
-        np.save("dataset/tensor.npy", tensor)

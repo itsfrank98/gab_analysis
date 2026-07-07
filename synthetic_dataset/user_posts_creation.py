@@ -1,18 +1,19 @@
 import argparse
 import csv
 import json
+import pickle
 import numpy as np
 import os
 import pandas as pd
 import re
-import time
 import torch
 from accelerate import Accelerator
 from creation_options import posts_levels
-from peft import PeftModel
-from tqdm import tqdm
+from cluster_sample import sample
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
+print(os.listdir())
+print(torch.cuda.is_available())
 os.makedirs("users", exist_ok=True)
 
 FIELDNAMES = ["account_id", "username", "user_bio", "nationality", "state_of_origin", "gender", "ethnicity",
@@ -58,13 +59,13 @@ def load_model_and_tokenizer(load_in_4bit, model_path, accelerator):
 def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
     """Run inference for a single prompt and return the generated text."""
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
-
+    temperature = np.random.choice([0.8, 0.9, 1.0, 1.1, 1.2])
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=True,
-            temperature=0.8,
+            temperature=temperature,
             top_p=0.9,
             repetition_penalty=1.1,
             pad_token_id=tokenizer.pad_token_id,
@@ -76,7 +77,8 @@ def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
 
 
 def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gender, ethnicity, religion, political_view,
-                             user_interests, age_interval, job, model, tokenizer, n_posts, real_posts: pd.DataFrame, device):
+                             user_interests, age_interval, job, model, tokenizer, n_posts, real_posts: pd.DataFrame,
+                             distances, labels, device, ids):
     d = {
         "account_id": user_id,
         "username": user_name,
@@ -125,34 +127,36 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
             "talk about committing terrorist acts", "declare war to the unfaithful", "wish for the systematic destruction of entire community"]
     }
 
-    now = time.time()
     for i in range(n_posts):
-        print("\n\nITERATION {}".format(i), flush=True)
+        #print("\n\nITERATION {}".format(i), flush=True)
         ok = False
         counter_not_ok = 0
         post_level = np.random.choice(list(posts_levels.keys()), p=list(posts_levels.values()))
         style = str(np.random.choice(radicalization_levels[post_level]))
         few_shot_part = ""
         if real_posts is not None:
-            posts = real_posts[real_posts["exact_level_found"] == post_level]["content"].tolist()
-            print(type(posts))
-            print(len(posts))
-            sampled_posts = np.random.choice(posts, 10)
+            if labels and distances and ids:
+                if post_level >= 3:
+                    posts = real_posts[real_posts["exact_level_found"] == post_level]["content"].tolist()
+                    sampled_posts = np.random.choice(posts, 10)
+                else:
+                    lab = labels[post_level]
+                    dist = distances[post_level]
+                    clustered_posts_id = ids[post_level]
+                    ids_post = sample(distances_to_centroid=dist, labels=lab, post_ids=clustered_posts_id,
+                                      peripheral_ratio=0.6, random_state=None)
+                    sampled_posts = real_posts[real_posts["id"].isin(ids_post)]["content"].tolist()
+            else:
+                posts = real_posts[real_posts["exact_level_found"] == post_level]["content"].tolist()
+                sampled_posts = np.random.choice(posts, 10)
             sampled_posts = [p.replace('\n', ' ').replace('\r', ' ') for p in sampled_posts]
             few_shot_part = (
                 "Here are some example posts published on the platform. Analyze the tone, vocabulary register and sentence "
-                "structure. Ignore what the posts are about entirely.: "
-                f"- \"{sampled_posts[0]}\" "
-                f"- \"{sampled_posts[1]}\" "
-                f"- \"{sampled_posts[2]}\" "
-                f"- \"{sampled_posts[3]}\" "
-                f"- \"{sampled_posts[4]}\" "
-                f"- \"{sampled_posts[5]}\" "
-                f"- \"{sampled_posts[6]}\" "
-                f"- \"{sampled_posts[7]}\" "
-                f"- \"{sampled_posts[8]}\" "
-                f"- \"{sampled_posts[9]}\" "
+                "structure, and replicate them in the post you are going to write. Ignore what the posts are about entirely.: "
             )
+            for p in sampled_posts:
+                few_shot_part += f"- \"{p}\"; "
+
         prompt = (
             f"Your username is {user_name}. You are a {gender} and your age is in the interval {age_interval}. You are an "
             f"american citizen, born and raised in {state_of_origin} and your ethnicity is {ethnicity}. {religious_part}. "
@@ -165,18 +169,15 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
             f"OUTPUT INSTRUCTIONS: \n"
             "* The post must not be longer than 100 words; "
             "* The post doesn't contain multimedia content; "
-            "* The expected output is a JSON dictionary with this structure: {\"response\": <post>}; "
+            "* The output format must exclusively be a JSON dictionary with this structure: {\"response\": <post>}; "
             "* Your answer must only contain the dictionary and nothing else."
         )
-        print(style, flush=True)
-        while not ok and counter_not_ok<3:
-            user_posts = generate_posts(model=model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
+        while not ok and counter_not_ok<2:
+            user_post = generate_posts(model=model, tokenizer=tokenizer, prompt=prompt, max_new_tokens=1000,
                                         device=device)
             try:
-                matches = re.findall(r'\{"response"[^{}]*\}', user_posts, re.DOTALL)
-                print(matches, flush=True)
-                if matches:
-                    print("ok")
+                matches = re.findall(r'\{\s*"response"[^{}]*\}', user_post, re.DOTALL)
+                if len(matches) > 0:
                     d_copy = d.copy()
                     d_copy["format_style"] = style
                     d_copy["level"] = post_level
@@ -188,10 +189,8 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
                     print("ERROR!")
                     counter_not_ok += 1
             except (json.decoder.JSONDecodeError, KeyError) as err:
-                print("ERROR!!", user_id)
                 print(err)
                 counter_not_ok += 1
-    print(f"TIME SPENT: {(time.time()-now)} seconds")
     return ld
 
 
@@ -201,43 +200,54 @@ def main(output_fname, n_posts, model_path, accelerator, users_profiles_path=Non
 
     base, ext = os.path.splitext(output_fname)
     process_output_file = f"{base}_proc{accelerator.process_index}{ext}"
-    print(process_output_file)
     if accelerator.is_main_process:
         print(f"\nStarting computing file: {users_profiles_path}")
         print(f"Number of processes: {accelerator.num_processes}\n")
 
+    posts = pd.DataFrame(columns=["account_id"])
     if already_created_posts:
         posts = pd.read_csv(already_created_posts)
         present_users = list(posts.drop_duplicates(subset="account_id")["account_id"])
-
+        print("PRESENT USERS: ", len(present_users))
     model, tokenizer = load_model_and_tokenizer(model_path=model_path, load_in_4bit=True, accelerator=accelerator)
 
     if real_posts_path:
         real_posts = pd.read_csv(real_posts_path)
         ids_to_remove = real_posts[real_posts['content'].str.split().str.len() >= 40]["id"].tolist()
         real_posts = real_posts[~real_posts['id'].isin(ids_to_remove)]
+        distances = []
+        labels = []
+        ids = []
+        if os.path.exists("labels_distances"):
+            for i in range(6):
+                with open(f"labels_distances/distances_level_{i}.pkl", "rb") as f:
+                    distances.append(pickle.load(f))
+                with open(f"labels_distances/labels_level_{i}.pkl", "rb") as f:
+                    labels.append(pickle.load(f))
+                with open(f"labels_distances/postids_level_{i}.pkl", "rb") as f:
+                    ids.append(pickle.load(f))
 
     # Provide a csv containing the user descriptions and create the posts from there
-    df = pd.read_csv(users_profiles_path)[:10]
+    df = pd.read_csv(users_profiles_path)
     records = df.to_dict('records')
-
     with accelerator.split_between_processes(records) as shard:
         file_exists = os.path.isfile(process_output_file)
         with open(process_output_file, mode='a', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
             if not file_exists:
                 writer.writeheader()
-            print("Creating posts...")
             for i, row in enumerate(shard):
                 print(f"[proc {accelerator.process_index}] {i}/{len(shard)}")
-                if row["account_id"] not in present_users:
+                posts_from_user = len(posts[posts["account_id"]==row["account_id"]])
+                if posts_from_user < n_posts-2:
+                    present_users.append(row["account_id"])
                     #print(row["account_id"], flush=True)
                     d = create_user_moody_prompt(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],
                                                  state_of_origin=row["state_of_origin"], gender=row["gender"], age_interval=row["age_interval"],
                                                  political_view=row["political_leaning"], user_interests=row["interests"],
                                                  job=row["profession"], ethnicity=row["ethnicity"], religion=row["religion"],
-                                                 model=model, tokenizer=tokenizer, n_posts=n_posts, real_posts=real_posts,
-                                                 device=accelerator.device)
+                                                 model=model, tokenizer=tokenizer, n_posts=n_posts-posts_from_user, real_posts=real_posts,
+                                                 device=accelerator.device, distances=distances, labels=labels, ids=ids)
                     for e in d:
                         writer.writerow(e)
                     f.flush()
@@ -248,19 +258,19 @@ if __name__ == "__main__":
     # Args Sorted alphabetically
     parser.add_argument("--users_profiles_path", type=str, default="synthetic_user_profiles.csv",
                         help="Path to the csv file containing the users' profiles from which the posts will be created")
-    parser.add_argument("--n_posts", type=int, default=None, help="How many posts to create per user")
+    parser.add_argument("--n_posts", type=int, default=10, help="How many posts to create per user")
     parser.add_argument("--already_created_posts", type=str, default=None,
                         help="Path to the csv file containing the posts that have already been created. Set it to "
                              "complete the dataset, if some users were not generated or there were format errors")
-    parser.add_argument("--output_fname", type=str, default="foo.csv",
+    parser.add_argument("--output_fname", type=str, default="symthetic_posts.csv",
                         help="Path where the output will be saved. The output can either be the user descriptions, or "
                              "the user descriptions together with the synthetic posts")
-    parser.add_argument("--model_path", type=str, default=None, help="Path to the LLM")
+    parser.add_argument("--model_path", type=str, default="/home/francesco/LLMs_safetensor/irix", help="Path to the LLM")
     parser.add_argument("--real_posts_path", type=str, default=None, help="Path to the csv file containing the example posts")
     args = parser.parse_args()
 
     accelerator = Accelerator()
-    main(users_profiles_path=args.users_profiles_path, output_fname=args.output_fname, already_created_posts=None,
+    main(users_profiles_path=args.users_profiles_path, output_fname=args.output_fname, already_created_posts=args.already_created_posts,
          n_posts=args.n_posts, model_path=args.model_path, real_posts_path=args.real_posts_path,
          accelerator=accelerator)    #args.already_created_posts
 

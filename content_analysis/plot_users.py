@@ -178,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument("--labeled_synthetic_posts_path", type=str, default="../synthetic_dataset/synthetic_posts/synthetic_posts_labeled.csv")
     parser.add_argument("--random_sampling", action="store_true", default=False, help="Set it to true if you want to randomly sample from the real dataset")
     parser.add_argument("--plot_safe", action="store_true", default=True)
-    parser.add_argument("--plot_risky", action="store_true", default=True)
+    parser.add_argument("--plot_risky", action="store_true", default=False)
     args = parser.parse_args()
 
     main(synthetic_feats_path=args.synthetic_feats_path, real_feats_path=args.real_feats_path,

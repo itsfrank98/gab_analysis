@@ -1,3 +1,5 @@
+"""La creazione di snapshot sintetici viene fatta in create_data_for_tgn"""
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
