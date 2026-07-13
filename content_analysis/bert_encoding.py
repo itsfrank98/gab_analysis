@@ -19,7 +19,7 @@ def main(df, content_field_name, features_dst, post_id_field_name):
                 encoded_input = tokenizer(post_text, return_tensors='pt', truncation=True)
                 output = model(**encoded_input)
                 output = output.last_hidden_state.mean(dim=1).squeeze()
-                dct[row[post_id_field_name]] = output
+                dct[int(row[post_id_field_name])] = output
             except ValueError:
                 print(post_text)
         if index % 100 == 0:
@@ -61,7 +61,10 @@ if __name__ == "__main__":
     non_aggregated_embs_src = args.non_aggregated_embs_src
     add_id = args.add_post_id_flag
 
-    df = pd.read_csv(df_src)
+    if df_src.split(".")[-1] == "csv":
+        df = pd.read_csv(df_src)
+    elif df_src.split(".")[-1] == "tsv":
+        df = pd.read_csv(df_src, sep="\t")
 
     if add_id:       # quello che sta in questo if serve a settare degli id per i post sintetici. andrebbe spostato nel file in cui vengono creati i post
         df = df.drop(columns=[post_id_field_name]) if post_id_field_name in df.columns else df

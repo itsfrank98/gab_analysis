@@ -80,6 +80,8 @@ def interaction_follow_dataset_creation(src, features, full_users_set, mapping, 
             print(len(df_shuffled_inc))
 
     for i, d in tqdm(enumerate(dirs)):
+        if d.__contains__("synthetic_snapshots"):
+            continue
         df_incremental = pd.read_csv(os.path.join(src, d, df_name))
         network = set(read_edg_file(os.path.join(src, d, "social_network.edg"), type_pairs="tuple"))
         if reset_network:
@@ -129,11 +131,16 @@ if __name__ == "__main__":
     df_names = ["comments_current_snapshot.csv", "posts_current_snapshot.csv"]
     processed_contents_src = ["comments_only_posting_users.csv", "posts_processed.csv"]
     MAPPING_NAME = "mapping.pkl"  # "mapping_baseline.pkl"
-    SYNTHETIC_POSTS_SRC = os.path.join(SYNTHETIC_DATASET_DIR, "synthetic_posts", "synthetic_posts_10k_final.tsv")
+    #SYNTHETIC_POSTS_SRC = os.path.join(SYNTHETIC_DATASET_DIR, "synthetic_posts", "synthetic_posts_10k_final.tsv")
+    SYNTHETIC_POSTS_SRC = os.path.join("for_immense", "synthetic_posts_10k_final.tsv")
 
     SNAPSHOT_SRC = os.path.join(REAL_DATASET_DIR, "files_for_tgn", "snapshots_30_06")        # "baseline"
+    SYNTHETIC_SNAPSHOTS_SRC = os.path.join(SNAPSHOT_SRC, "synthetic_snapshots_2")
     CONTENT_PROCESSED_SRC = os.path.join(REAL_DATASET_DIR, processed_contents_src[1])
-    OUTPUT_GAB_DF_NAME = f"gab_posts_no_zero_snap0_{EMBEDDING_TYPE}"
+    name = "gab_posts"
+    if not INITIALIZE_USERS_SNAP_0:
+        name += "_no_zero_snap0"
+    OUTPUT_GAB_DF_NAME = f"{name}_{EMBEDDING_TYPE}"    #_byuser
 
     df_name = df_names[1]
 
@@ -143,13 +150,26 @@ if __name__ == "__main__":
     mapping = load_from_pickle(os.path.join(SNAPSHOT_SRC, MAPPING_NAME))
 
     if CREATE_SYNTHETIC_SNAPSHOTS > 0:
+        a = 0
         synthetic_posts = pd.read_csv(SYNTHETIC_POSTS_SRC, sep="\t", quoting=3, escapechar="\\")
-        shuffled = synthetic_posts.sample(frac=1).reset_index(drop=True)
-        chunk_size = len(synthetic_posts)//CREATE_SYNTHETIC_SNAPSHOTS
-        dfs = [shuffled.iloc[i * chunk_size:(i + 1) * chunk_size] for i in range(CREATE_SYNTHETIC_SNAPSHOTS)]
-        dfs.append(shuffled.iloc[CREATE_SYNTHETIC_SNAPSHOTS * chunk_size:])
-        for i, df in enumerate(dfs):
-            df.to_csv(os.path.join(SNAPSHOT_SRC, f"batch{i}_synthetic.tsv"), sep="\t", quoting=3, escapechar="\\", index=False)
+        if a==0:        # shuffle posts
+            shuffled = synthetic_posts.sample(frac=1).reset_index(drop=True)
+            chunk_size = len(synthetic_posts)//CREATE_SYNTHETIC_SNAPSHOTS
+            dfs = [shuffled.iloc[i * chunk_size:(i + 1) * chunk_size] for i in range(CREATE_SYNTHETIC_SNAPSHOTS)]
+            dfs.append(shuffled.iloc[CREATE_SYNTHETIC_SNAPSHOTS * chunk_size:])
+            for i, df in enumerate(dfs):
+                df.to_csv(os.path.join(SYNTHETIC_SNAPSHOTS_SRC, f"batch_{i}_synthetic.tsv"), sep="\t", quoting=3, escapechar="\\", index=False)
+        else:
+            users_df = pd.read_csv("final_dataset/synthetic_user_profiles_10k.csv")
+            chunk_size = len(users_df) // CREATE_SYNTHETIC_SNAPSHOTS
+            users_dfs = [users_df.iloc[i * chunk_size:(i + 1) * chunk_size] for i in range(CREATE_SYNTHETIC_SNAPSHOTS)]
+            users_dfs.append(users_df.iloc[CREATE_SYNTHETIC_SNAPSHOTS * chunk_size:])
+            for i, df in enumerate(users_dfs):
+                account_ids = df["account_id"].unique()
+                batch_df = synthetic_posts[synthetic_posts["account_id"].isin(account_ids)]
+                batch_df.to_csv(os.path.join(SYNTHETIC_SNAPSHOTS_SRC, f"batch_{i}_synthetic.tsv"), sep="\t", quoting=3,
+                          escapechar="\\", index=False)
+
 
     # branch that manages the interactions in the real dataset
     if CREATE_INTERACTION_DF:
@@ -191,14 +211,17 @@ if __name__ == "__main__":
         ld = []
         node_feat_dim = synthetic_features[list(synthetic_features.keys())[0]].shape[0]
         last_ts = sorted(df["timestamp"].tolist())[-1]+1
-        synthetic_df_list = [f"batch_{i}_synthetic.tsv" for i in [1, 2, 3]]
+        n_of_batches = len(os.listdir(SNAPSHOT_SRC))
+        synthetic_df_list = [f"batch_{i}_synthetic.tsv" for i in range(CREATE_SYNTHETIC_SNAPSHOTS)]
         already_initialized_users = []
         for d in synthetic_df_list:
-            synthetic_df = pd.read_csv(os.path.join(SNAPSHOT_SRC, d), sep="\t", quoting=3, escapechar="\\")
+            synthetic_df = pd.read_csv(os.path.join(SYNTHETIC_SNAPSHOTS_SRC, d), sep="\t", quoting=3, escapechar="\\")
+            synthetic_df = synthetic_df[synthetic_df["id"].isin(list(synthetic_features.keys()))]
+            #print(len(synthetic_df))
             users = synthetic_df["account_id"].drop_duplicates().tolist()
             for u in tqdm(users):
                 posts_by_user = synthetic_df[synthetic_df["account_id"] == u]["id"].tolist()
-                posts_features = [synthetic_features[i] for i in posts_by_user]
+                posts_features = [synthetic_features[int(i)] for i in posts_by_user]
                 avg = torch.stack(posts_features).mean(dim=0).numpy()
                 ld.append({"follower_id": mapping[u], "followed_id": mapping[u], "timestamp": last_ts, "state_label": 0,        # Evoluzione dell'utente nello snapshot corrente
                            "comma_separated_list_of_features": ",".join(str(e) for e in avg), "type_interaction": 1})
@@ -210,4 +233,4 @@ if __name__ == "__main__":
 
         df_synth = pd.DataFrame(ld)
         final_df = pd.concat([df, df_synth]).sort_values(by=["timestamp"])
-        final_df.to_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + "_with_synthetic.tsv"), sep="\t", quoting=3, escapechar="\\", index=False)
+        final_df.to_csv(os.path.join(SNAPSHOT_SRC, OUTPUT_GAB_DF_NAME + f"_with_synthetic_{CREATE_SYNTHETIC_SNAPSHOTS}.tsv"), sep="\t", quoting=3, escapechar="\\", index=False)

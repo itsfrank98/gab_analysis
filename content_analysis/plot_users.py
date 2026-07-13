@@ -62,14 +62,16 @@ def manage_labeled(unit, features, df):
 
 def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_df_path, embedding_type, unit="users",
          dimensions=2, random_sampling=False, labeled_synthetic_posts_path=None, labeled_real_posts_path=None,
-         plot_safe=True, plot_risky=True):
+         plot_safe=False, plot_risky=False, show_extremes=False):
     with open(synthetic_feats_path, 'rb') as f:
         synthetic_feats = pickle.load(f)
     with open(real_feats_path, 'rb') as f:
         real_feats = pickle.load(f)
     print(f"Real features: {len(real_feats)}, Synthetic features: {len(synthetic_feats)}")
-
-    synthetic_matrix = np.array([v for v in synthetic_feats.values()])
+    if type(synthetic_feats) == dict:
+        synthetic_matrix = np.array([v for v in synthetic_feats.values()])
+    else:
+        synthetic_matrix = synthetic_feats
 
     if labeled_synthetic_posts_path and labeled_real_posts_path:
         labeled_synthetic_posts = pd.read_csv(labeled_synthetic_posts_path)
@@ -81,25 +83,29 @@ def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_
         matrix = np.vstack((safe_real_matrix, risky_real_matrix))
 
     else:
-        real_matrix = np.array([v for v in real_feats.values()])
+        if type(real_feats) == dict:
+            real_matrix = np.array([v for v in real_feats.values()])
+        else:
+            real_matrix = real_feats
         matrix = real_matrix
 
     if method.lower()=="pca":
         reduction = PCA(n_components=dimensions)
-        df1 = pd.read_csv(real_df_path)[["id", "content"]]
-        df2 = pd.read_csv(synthetic_df_path)
-        df2 = df2.rename(columns={"posts": "content"})
-        df2 = df2[["id", "content"]]
-        df = pd.concat([df1, df2])
-        is_synth1 = dict(zip(df1["id"], [False] * len(df1)))
-        is_synth2 = dict(zip(df2["id"], [True] * len(df2)))
-        is_synth1.update(is_synth2)
-        post_texts = dict(zip(df["id"], df["content"]))
+        if show_extremes:
+            df1 = pd.read_csv(real_df_path)[["id", "content"]]
+            df2 = pd.read_csv(synthetic_df_path)
+            df2 = df2.rename(columns={"posts": "content"})
+            df2 = df2[["id", "content"]]
+            df = pd.concat([df1, df2])
+            is_synth1 = dict(zip(df1["id"], [False] * len(df1)))
+            is_synth2 = dict(zip(df2["id"], [True] * len(df2)))
+            is_synth1.update(is_synth2)
+            post_texts = dict(zip(df["id"], df["content"]))
 
-        #pc1 = reduced_real[:, 0]
-        #pc2 = reduced_real[:, 1]
-        #show_extremes(values=pc1, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC1", k=100, embedding_type=embedding_type)
-        #show_extremes(values=pc2, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC2", k=100, embedding_type=embedding_type)
+            #pc1 = reduced_real[:, 0]
+            #reduced_real[:, 1]
+            #show_extremes(values=pc1, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC1", k=100, embedding_type=embedding_type)
+            #show_extremes(values=pc2, post_ids=df["id"].tolist(), post_texts=post_texts, is_synthetic=is_synth1, axis_name="PC2", k=100, embedding_type=embedding_type)
     else:
         reduction = TSNE(n_components=dimensions)
     reduction.fit(matrix)
@@ -138,6 +144,7 @@ def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_
         plt.ylabel(f'{method}2')
         plt.title(f'{method} Projection - {unit}')
         plt.tight_layout()
+        embedding_type = "goddammit"
         plt.savefig(f'plot_blue_red_{embedding_type}.png')
         plt.show()
 
@@ -166,19 +173,19 @@ def main(synthetic_feats_path, real_feats_path, method, real_df_path, synthetic_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synthetic_feats_path", type=str, default="../synthetic_dataset/features/features_sonar_synthetic_10k.pkl")     #"../synthetic_dataset/features/bert_features/bert_features_synthetic_moody_posts_10k.pkl"
-    parser.add_argument("--real_feats_path", type=str, default="../dataset/features/features_sonar_real.pkl")   # "../dataset/features/bert_features/bert_features_real_posts.pkl"
+    parser.add_argument("--real_feats_path", type=str, default="tgn_embeddings/train_embeddings.pkl")   #"../dataset/features/bert_features/bert_features_real_posts.pkl"
+    parser.add_argument("--synthetic_feats_path", type=str, default="tgn_embeddings/inference_embeddings_1000.pkl")     #"../synthetic_dataset/features/bert_features/bert_features_synthetic_moody_posts_10k.pkl"
     parser.add_argument("--synthetic_df_path", type=str, default="merged_id.csv")
     parser.add_argument("--real_df_path", type=str, default="../dataset/gab_posts_labeled_qwen.csv")
     parser.add_argument("--method", type=str, default="pca")
-    parser.add_argument("--unit", type=str, default="posts")
+    parser.add_argument("--unit", type=str, default="TGN embeddings")
     parser.add_argument("--dimensions", type=int, default=2)
     parser.add_argument("--embedding_type", type=str, default="sonar")
-    parser.add_argument("--labeled_real_posts_path", type=str, default="../dataset/gab_posts_labeled_qwen.csv")
-    parser.add_argument("--labeled_synthetic_posts_path", type=str, default="../synthetic_dataset/synthetic_posts/synthetic_posts_labeled.csv")
+    parser.add_argument("--labeled_real_posts_path", type=str, default=None)    # ../dataset/gab_posts_labeled_qwen.csv
+    parser.add_argument("--labeled_synthetic_posts_path", type=str, default=None) #../synthetic_dataset/synthetic_posts/synthetic_posts_labeled.csv
     parser.add_argument("--random_sampling", action="store_true", default=False, help="Set it to true if you want to randomly sample from the real dataset")
-    parser.add_argument("--plot_safe", action="store_true", default=True)
-    parser.add_argument("--plot_risky", action="store_true", default=False)
+    parser.add_argument("--plot_safe", type=bool, default=False)
+    parser.add_argument("--plot_risky", type=bool, default=False)
     args = parser.parse_args()
 
     main(synthetic_feats_path=args.synthetic_feats_path, real_feats_path=args.real_feats_path,
