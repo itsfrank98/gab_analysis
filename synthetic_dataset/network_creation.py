@@ -6,14 +6,21 @@ import time
 from openai import OpenAI
 from tqdm import tqdm
 
-def read_edg_file(path, type_pairs="list"):
+
+def read_edg_file(path, type_pairs="list", mapper=None):
     edges = []
     with open(path, "r") as f:
         for line in f.readlines():
+            n1, n2 = line.strip().split("\t")
+            n1 = int(n1)
+            n2 = int(n2)
+            if mapper:
+                n1 = mapper[n1]
+                n2 = mapper[n2]
             if type_pairs == "list":
-                edges.append(line.split())
+                edges.append([n1, n2])
             elif type_pairs == "tuple":
-                edges.append(tuple(line.split()))
+                edges.append((n1, n2))
     return edges
 
 def write_edg_file(edges, path):

@@ -1,0 +1,97 @@
+from os.path import join, exists
+import pandas as pd
+import torch
+import torch_geometric.transforms as T
+from torch_geometric.loader import NeighborLoader
+
+from sage import SAGE, create_mappers, create_graph
+from utils import save_to_pickle
+
+def reduce_dimension(model_dir, ne_dim, train_df, we_dim, batch_size, edge_path, epochs, features_dict, sizes,
+                     aggregation, training_weights, field_name_id, field_name_label, loss, retrain=False):
+    """
+    This function applies one of the node dimensionality reduction techniques and generate the feature vectors for
+    training the decision tree.
+    Args:
+        :param model_dir: Directory where the models will be saved.
+        :param ne_dim: Dimension of the embeddings to create.
+        :param train_df: Dataframe with the training data. The IDs will be used.
+        :param batch_size: Batch size to use during training.
+        :param edge_path: Path to file containing the list of edges. The file shall contain one row per each edge,
+        and the row shall contain the ids of the nodes being connected and, in case of the spatial network, their
+        distance. Example 1:
+        12\t15
+        13\t17
+        means that user 12 follows user 15 and user 13 follows user 17. Example 2:
+        12\t5\t0.52
+        means that the users with id 12 and 5 have spatial distance equal to 0.52
+        :param epochs: Epochs for training the node embedding model.
+        :param features_dict: (graphsage) Dictionary having as keys the IDs of the users and as values the sum of the
+        embeddings of their posts.
+        :param sizes: Array containing the number of neighbors to sample for each node.
+        :param training_weights: tensor of shape (1, num_classes) containing the weights to give to each class while
+        training the graphsage model. If None, no weights will be used. Set this to None if loss==focal
+        :param loss: Training loss
+    Returns:
+        predictions (n, num_classes): Predictions made by the node embedding model for the nodes. For each node, its
+        prediction is the computed probability of the node to belong to each of the class
+    """
+    weights_path = join(model_dir, f"graphsage_{aggregation}_{ne_dim}_{we_dim}_{loss}")
+    model_path = join(model_dir, f"graphsage_{aggregation}_{ne_dim}_{we_dim}_{loss}")
+
+    weights_path += ".h5"
+    model_path += ".pkl"
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    first_key = list(features_dict.keys())[0]
+    in_channels = len(features_dict[first_key])
+
+    directed = True
+    mapper_train, inv_map_train = create_mappers(features_dict)
+    graph = create_graph(inv_map=inv_map_train, features=features_dict, edg_dir=edge_path,
+                         df=train_df, field_name_id=field_name_id, field_name_label=field_name_label)
+    save_to_pickle(f"graph_{we_dim}.pkl", graph)
+    graph = graph.to(device)
+    split = T.RandomLinkSplit(num_val=0.1, num_test=0.0, is_undirected=not directed,
+                              add_negative_train_samples=False, neg_sampling_ratio=1.0)
+    train_data, valid_data, _ = split(graph)
+    sage = SAGE(in_dim=in_channels, hidden_dim=ne_dim, num_layers=len(sizes), directed=directed, loss=loss, n_classes=6)
+    sage = sage.to(device)
+    if training_weights is not None:
+        training_weights = training_weights.to(device)
+
+    train_loader = NeighborLoader(train_data, num_neighbors=sizes, batch_size=batch_size)
+    if not exists(model_path) or retrain:
+        print("Training node embedding model\n")
+        optimizer = torch.optim.Adam(lr=.0003, params=sage.parameters(), weight_decay=1e-4)
+        best_loss = 9999
+        for i in range(epochs):
+            loss = sage.train_sage(train_loader, optimizer=optimizer, weights=training_weights)
+            val_loss = sage.test(valid_data)
+            if loss < best_loss:
+                best_loss = loss
+                print("New best model found at epoch {}. Loss: {}, val_loss: {}".format(i, loss, val_loss))
+                torch.save(sage.state_dict(), weights_path)
+            if i % 5 == 0:
+                print("Epoch {}: train loss {}, val loss: {}".format(i, loss, val_loss))
+        sage.load_state_dict(torch.load(weights_path))
+        save_to_pickle(model_path, sage)
+    else:
+        sage.load_state_dict(torch.load(weights_path))
+    predictions = sage(graph, inference=True).cpu()
+    predictions = predictions.detach().numpy()
+
+    return predictions
+
+if __name__ == "__main__":
+    ne_dim = 256
+    train_features = torch.load("train_real_user_embeddings.pt")
+    features_dict = {}
+    train_network_path = "train_network.edg"
+    for k, v in zip(train_features["account_id"], train_features["embeddings"]):
+        features_dict[k] = v
+    train_df = pd.read_csv("real_users_labels.tsv", sep="\t")
+
+    preds = reduce_dimension(model_dir="sage_models", ne_dim=ne_dim, we_dim=768, batch_size=64, edge_path=train_network_path,
+                             epochs=50, features_dict=features_dict, sizes=[10,5], aggregation="xlmt_attm_pooled", train_df=train_df,
+                             field_name_id="account_id", field_name_label="exact_level_found", loss="none", training_weights=None,)
