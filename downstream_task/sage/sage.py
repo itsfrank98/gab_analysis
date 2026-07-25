@@ -1,8 +1,7 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from kornia.losses import binary_focal_loss_with_logits
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import f1_score
 from torch_geometric.data import Data
 from torch_geometric.nn import GraphConv, SAGEConv
 from synthetic_dataset.network_creation import read_edg_file
@@ -25,7 +24,7 @@ def create_mappers(features_dict):
     return mapper, inv_map
 
 
-def create_graph(inv_map, features, edg_dir, df, field_name_id, field_name_label, edgelist=None, inference=False):
+def create_graph(inv_map, features, edg_dir, df, field_name_id, field_name_label=None, edgelist=None, inference=False):
     """
     Function to create a graph starting from the features, the edge list, and the node labels.
     :param: df: Dataframe containing the users. It is used to retrieve the node labels
@@ -33,39 +32,33 @@ def create_graph(inv_map, features, edg_dir, df, field_name_id, field_name_label
     :param: label_field: Name of the label field in the dataframe. Default 'label'
     :param: edgelist: List of edges. If set to none, the function will create it. It is not set to none only when
             providing prediction for a specific set of users
+    :return: (graph, node_ids). node_ids[i] is the account_id corresponding to row i of graph.x/graph.y, and of
+            any predictions later computed on graph - use it to map predictions back to account_ids.
     """
-    inv_mapper_list = list(inv_map.keys())
-    feats = []
-    # Create the graph
-    for i in inv_mapper_list:
-        feats.append(features[int(i)])
+    node_ids = list(inv_map.keys())
+    feats = [features[int(k)] for k in node_ids]
     x = torch.Tensor(np.array(feats))
-    y = []
     if edgelist is None:
         edgelist = read_edg_file(edg_dir, type_pairs="tuple", mapper=inv_map)
-    #print(len(edgelist))
     edges = np.array(list(zip(*edgelist)))
     if len(edges.shape) == 1:
         edges = np.zeros(shape=(2, 1))
     edge_index = torch.tensor(edges, dtype=torch.long)
     if not inference:
-        for k in features:
-            if k in df[field_name_id].unique():
-                y.append(df[df[field_name_id] == k][field_name_label].values[0])
-        y = torch.tensor(np.array(y), dtype=torch.long)
+        labels = df.drop_duplicates(subset=field_name_id).set_index(field_name_id)[field_name_label]
+        y = torch.tensor(labels.loc[node_ids].to_numpy(), dtype=torch.long)
     else:
         y = None
     graph = Data(x=x, y=y, edge_index=edge_index)
-    return graph
+    return graph, node_ids
 
 
 class SAGE(torch.nn.Module):
-    def __init__(self, in_dim, hidden_dim, num_layers, directed, loss, n_classes):
+    def __init__(self, in_dim, hidden_dim, num_layers, loss, n_classes):
         super(SAGE, self).__init__()
         self.device = torch.device(f'cuda' if torch.cuda.is_available() else 'cpu')
         self.convs = torch.nn.ModuleList()
         self.num_layers = num_layers
-        self.directed = directed
         self.loss = loss
         self.n_classes = n_classes
         self.convs.append(SAGEConv(in_dim, hidden_dim, aggr="mean", normalize=True))
@@ -82,11 +75,7 @@ class SAGE(torch.nn.Module):
         if inference_for_embedding:
             return x
         x = self.output(x, batch.edge_index)
-        if self.loss != "focal":
-            x = torch.log_softmax(x, dim=-1)
-
-        if inference and self.loss == "focal":
-            x = F.log_softmax(x, dim=-1)
+        x = torch.log_softmax(x, dim=-1)
         return x
 
     def train_sage(self, train_loader, optimizer, weights):
@@ -97,26 +86,32 @@ class SAGE(torch.nn.Module):
             optimizer.zero_grad()
             batch = batch.to(self.device)
             out = self(batch)
+            seed_out = out[:batch.batch_size]
+            seed_y = batch.y[:batch.batch_size]
             if self.loss == "weighted":
-                loss = F.nll_loss(out, target=batch.y, weight=weights)
-            elif self.loss == "focal":
-                target = torch.tensor(np.eye(2, dtype='uint8')[batch.y.cpu()], dtype=torch.float)
-                loss = binary_focal_loss_with_logits(out, target=target.to(self.device), reduction="mean")
-            elif self.loss == "none":
-                loss = F.nll_loss(out, target=batch.y, weight=None)
+                loss = F.nll_loss(seed_out, target=seed_y, weight=weights)
             else:
-                raise ValueError("loss must either be 'weighted', 'focal' or 'none'")
+                raise ValueError("loss must be 'weighted'")
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
         return total_loss/len(train_loader)
 
     @torch.no_grad()
-    def test(self, data):
+    def test(self, data, mask):
         data = data.to(self.device)
+        mask = mask.to(self.device)
         self.eval()
-        out_val = self(data)
-        out_val_src = out_val[data.edge_label_index[0]]
-        out_val_dst = out_val[data.edge_label_index[1]]
-        link_pred = (out_val_src * out_val_dst).sum(-1)
-        return roc_auc_score(data.edge_label.cpu().numpy(), link_pred.cpu().numpy())
+        out = self(data)
+        val_out = out[mask]
+        val_y = data.y[mask]
+        loss = F.nll_loss(val_out, target=val_y).item()
+        preds = val_out.argmax(dim=-1)
+        acc = (preds == val_y).float().mean().item()
+
+        y_true = val_y.cpu().numpy()
+        y_pred = preds.cpu().numpy()
+        labels = np.arange(self.n_classes)
+        macro_f1 = f1_score(y_true, y_pred, average="macro", labels=labels, zero_division=0)
+        per_class_f1 = f1_score(y_true, y_pred, average=None, labels=labels, zero_division=0)
+        return loss, acc, macro_f1, per_class_f1
