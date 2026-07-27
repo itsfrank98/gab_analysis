@@ -9,6 +9,7 @@ import torch.nn as nn
 from datasets import Dataset
 from sklearn.metrics import accuracy_score, classification_report, precision_recall_fscore_support
 from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModel,
@@ -34,7 +35,7 @@ LABEL_COLUMN = "exact_level_found"
 PREDICTION_COLUMN = "predicted_by_xlmt"
 NUM_LABELS = 6
 MAX_LENGTH = 512
-MAX_POSTS_PER_USER = 32
+MAX_POSTS_PER_USER = 500
 TRAIN_FRAC, VAL_FRAC, TEST_FRAC = 0.7, 0.15, 0.15
 SEED = 42
 N_FOLDS = 10
@@ -82,7 +83,7 @@ def _cap_posts(group: pd.DataFrame, cap: int, label: int, rng: np.random.Generat
     return group.loc[chosen_idx, TEXT_COLUMN].astype(str).tolist()
 
 
-def load_user_bags(path: str, max_posts_per_user: int = MAX_POSTS_PER_USER, seed: int = SEED) -> pd.DataFrame:
+def load_user_bags(path: str, labels_dict: {}, max_posts_per_user: int = MAX_POSTS_PER_USER, seed: int = SEED) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t")
     df = df.dropna(subset=["account_id", TEXT_COLUMN, LABEL_COLUMN])
     df[LABEL_COLUMN] = df[LABEL_COLUMN].astype(int)
@@ -91,7 +92,7 @@ def load_user_bags(path: str, max_posts_per_user: int = MAX_POSTS_PER_USER, seed
     rows = []
     dropped = 0
     for account_id, group in df.groupby("account_id"):
-        label = int(group[LABEL_COLUMN].max())
+        label = int(group[LABEL_COLUMN].max()) if not labels_dict else labels_dict[account_id]
         posts = _cap_posts(group, max_posts_per_user, label, rng)
         if not posts:
             dropped += 1
@@ -190,12 +191,19 @@ class UserBagCollator:
 
 
 class UserAttentionPoolingClassifier(nn.Module):
-    def __init__(self, model_name: str = MODEL_NAME, num_labels: int = NUM_LABELS):
+    def __init__(
+        self,
+        model_name: str = MODEL_NAME,
+        num_labels: int = NUM_LABELS,
+        class_weights: torch.Tensor | None = None,
+    ):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
         self.attn_score = nn.Linear(hidden_size, 1)
         self.classifier = nn.Linear(hidden_size, num_labels)
+        # only applied during eval (see forward) - training still uses the unweighted loss
+        self.register_buffer("class_weights", class_weights)
 
     def encode(self, input_ids, attention_mask, post_mask):
         """Pools a batch of per-user post bags into one embedding per user (B, H)."""
@@ -219,12 +227,13 @@ class UserAttentionPoolingClassifier(nn.Module):
         logits = self.classifier(user_embeds)
         loss = None
         if labels is not None:
-            loss = nn.functional.cross_entropy(logits, labels)
+            weight = None if self.training else self.class_weights
+            loss = nn.functional.cross_entropy(logits, labels, weight=weight)
         return {"loss": loss, "logits": logits}
 
 
-def build_model() -> UserAttentionPoolingClassifier:
-    return UserAttentionPoolingClassifier()
+def build_model(class_weights: torch.Tensor | None = None) -> UserAttentionPoolingClassifier:
+    return UserAttentionPoolingClassifier(class_weights=class_weights)
 
 
 def compute_metrics(eval_pred) -> dict:
@@ -262,13 +271,9 @@ def load_trainer(model_path: str, data_collator: UserBagCollator) -> Trainer:
     )
 
 
-def train(train_dataset: Dataset, val_dataset: Dataset, data_collator: UserBagCollator, tokenizer) -> Trainer:
-    model = build_model()
-
-    train_dataset = train_dataset.add_column("length", [len(ids) for ids in train_dataset["input_ids"]])
-
-    training_args = TrainingArguments(
-        output_dir=OUTPUT_DIR,
+def _training_args(output_dir: str) -> TrainingArguments:
+    return TrainingArguments(
+        output_dir=output_dir,
         eval_strategy="epoch",
         save_strategy="no",  # explicit save below - Trainer's own checkpointing for a non-PreTrainedModel falls back to undocumented behavior
         train_sampling_strategy ="group_by_length",
@@ -283,6 +288,14 @@ def train(train_dataset: Dataset, val_dataset: Dataset, data_collator: UserBagCo
         seed=SEED,
         report_to="none",
     )
+
+
+def train(train_dataset: Dataset, val_dataset: Dataset, data_collator: UserBagCollator, tokenizer) -> Trainer:
+    model = build_model()
+
+    train_dataset = train_dataset.add_column("length", [len(ids) for ids in train_dataset["input_ids"]])
+
+    training_args = _training_args(OUTPUT_DIR)
 
     trainer = Trainer(
         model=model,
@@ -310,6 +323,73 @@ def train(train_dataset: Dataset, val_dataset: Dataset, data_collator: UserBagCo
     logger.info("Saved fine-tuned model to %s", OUTPUT_DIR)
 
     return trainer
+
+
+def _balanced_class_weights(labels: np.ndarray, num_labels: int = NUM_LABELS) -> torch.Tensor:
+    weights = compute_class_weight("balanced", classes=np.arange(num_labels), y=labels)
+    return torch.tensor(weights, dtype=torch.float)
+
+
+def _average_fold_metrics(fold_metrics: list) -> dict:
+    keys = fold_metrics[0].keys()
+    summary = {}
+    for key in keys:
+        values = np.array([m[key] for m in fold_metrics])
+        summary[key] = {"mean": float(values.mean()), "std": float(values.std())}
+    return summary
+
+
+def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagCollator, n_folds: int = N_FOLDS) -> list:
+    """Repeats the main() train/eval pipeline over n_folds stratified folds.
+
+    Same model, tokenization and training args as train() for each fold. The only
+    difference from that pipeline is that validation loss is computed with balanced
+    class weights (derived from the fold's own train split) to account for label
+    imbalance, since the plain unweighted loss used by train()/evaluate_on_test()
+    would let majority classes dominate the reported eval loss.
+    """
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
+    labels = bags_df["label"].to_numpy()
+
+    fold_metrics = []
+    for fold, (train_idx, val_idx) in enumerate(skf.split(bags_df, labels), start=1):
+        logger.info("Cross-validation fold %d/%d", fold, n_folds)
+        train_df = bags_df.iloc[train_idx].reset_index(drop=True)
+        val_df = bags_df.iloc[val_idx].reset_index(drop=True)
+
+        train_dataset = to_bag_dataset(train_df, tokenizer)
+        val_dataset = to_bag_dataset(val_df, tokenizer)
+        train_dataset = train_dataset.add_column("length", [len(ids) for ids in train_dataset["input_ids"]])
+
+        class_weights = _balanced_class_weights(train_df["label"].to_numpy())
+        model = build_model(class_weights=class_weights)
+
+        fold_output_dir = os.path.join(OUTPUT_DIR, "cross_validation", f"fold_{fold}")
+        trainer = Trainer(
+            model=model,
+            args=_training_args(fold_output_dir),
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            data_collator=data_collator,
+            compute_metrics=compute_metrics,
+        )
+        trainer.train()
+
+        metrics = trainer.evaluate()
+        logger.info("Fold %d metrics: %s", fold, metrics)
+        fold_metrics.append(metrics)
+        train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
+        save_user_embeddings(train_ids, train_embeddings, os.path.join(fold_output_dir, "train_user_embeddings.pt"))
+
+        test_ids, test_embeddings = extract_user_embeddings(trainer.model, val_df, tokenizer, data_collator)
+        save_user_embeddings(test_ids, test_embeddings, os.path.join(fold_output_dir, "test_user_embeddings.pt"))
+        torch.save(trainer.model.state_dict(), os.path.join(fold_output_dir, "model_state_dict.pt"))
+        tokenizer.save_pretrained(fold_output_dir)
+
+    summary = _average_fold_metrics(fold_metrics)
+    logger.info("Cross-validation summary over %d folds: %s", n_folds, summary)
+
+    return fold_metrics
 
 
 def extract_user_embeddings(
@@ -363,105 +443,37 @@ def evaluate_on_test(trainer: Trainer, test_dataset: Dataset, test_df: pd.DataFr
     logger.info("Wrote %d test predictions to %s", len(out_df), PREDICT_OUTPUT_PATH)
 
 
-# NOTE: run_kfold_cv predates the move to per-user attention-pooled bags (see train()/
-# to_bag_dataset() above) and has not been updated - it still calls the old flat-document
-# to_dataset()/load_data() helpers, which no longer exist, and build_model() now returns a
-# bag-shaped UserAttentionPoolingClassifier incompatible with this function's flow. It is not
-# called anywhere; left here for reference only and would need a rewrite before reuse.
-def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator) -> None:
-    skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
-
-    fold_metrics = []
-    oof_preds = np.empty(len(df), dtype=int)
-    oof_labels = np.empty(len(df), dtype=int)
-
-    for fold, (train_idx, val_idx) in enumerate(skf.split(df, y=df[LABEL_COLUMN]), start=1):
-
-        train_df = df.iloc[train_idx]
-        val_df = df.iloc[val_idx]
-
-        train_dataset = to_dataset(train_df, tokenizer)
-        val_dataset = to_dataset(val_df, tokenizer)
-
-        model = build_model()
-
-        training_args = TrainingArguments(
-            output_dir=f"{OUTPUT_DIR}/fold_{fold}",
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            load_best_model_at_end=True,
-            metric_for_best_model="f1_macro",
-            num_train_epochs=5,
-            per_device_train_batch_size=16,
-            per_device_eval_batch_size=32,
-            learning_rate=2e-5,
-            weight_decay=0.01,
-            warmup_ratio=0.1,
-            logging_steps=50,
-            seed=SEED,
-            report_to="none",
-        )
-
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            data_collator=data_collator,
-            processing_class=tokenizer,
-            compute_metrics=compute_metrics,
-        )
-        trainer.train()
-
-        predictions = trainer.predict(val_dataset)
-        preds = np.argmax(predictions.predictions, axis=-1)
-        labels = predictions.label_ids
-
-        oof_preds[val_idx] = preds
-        oof_labels[val_idx] = labels
-
-        logger.info("Fold %d metrics: %s", fold, predictions.metrics)
-        fold_metrics.append(predictions.metrics)
-
-    metric_names = [k for k in fold_metrics[0] if k.startswith("test_")]
-    with open(f"fold_{N_FOLDS}_metrics.txt", "w") as f:
-        f.write(f"=== Cross-validation summary ({N_FOLDS} folds) ===")
-        for name in metric_names:
-            values = [m[name] for m in fold_metrics]
-            f.write(f"\t{name} = {np.mean(values)} +/- {np.std(values)}\n")
-        f.close()
-
-    logger.info("Out-of-fold classification report")
-    print(classification_report(oof_labels, oof_preds, digits=4))
-
-
 def main() -> None:
+    CROSS_VAL = True
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     data_collator = UserBagCollator(tokenizer)
 
     report_token_lengths(pd.read_csv(DATA_PATH, sep="\t").dropna(subset=[TEXT_COLUMN]), tokenizer)
 
     bags_df = load_user_bags(DATA_PATH)
-    report_posts_per_user(bags_df)
-    train_df, val_df, test_df = split_bags(bags_df)
-    test_dataset = to_bag_dataset(test_df, tokenizer)
 
-    if model_exists(OUTPUT_DIR):
-        logger.info("Model exists, I am loading it")
-        trainer = load_trainer(OUTPUT_DIR, data_collator)
+    if not CROSS_VAL:
+        train_df, val_df, test_df = split_bags(bags_df)
+        test_dataset = to_bag_dataset(test_df, tokenizer)
+
+        if model_exists(OUTPUT_DIR):
+            logger.info("Model exists, I am loading it")
+            trainer = load_trainer(OUTPUT_DIR, data_collator)
+        else:
+            logger.info("Model doesn't exist, I am training it")
+            train_dataset = to_bag_dataset(train_df, tokenizer)
+            val_dataset = to_bag_dataset(val_df, tokenizer)
+            trainer = train(train_dataset, val_dataset, data_collator, tokenizer)
+
+        evaluate_on_test(trainer, test_dataset, test_df)
+
+        train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
+        save_user_embeddings(train_ids, train_embeddings, os.path.join(OUTPUT_DIR, "train_user_embeddings.pt"))
+
+        test_ids, test_embeddings = extract_user_embeddings(trainer.model, test_df, tokenizer, data_collator)
+        save_user_embeddings(test_ids, test_embeddings, os.path.join(OUTPUT_DIR, "test_user_embeddings.pt"))
     else:
-        logger.info("Model doesn't exist, I am training it")
-        train_dataset = to_bag_dataset(train_df, tokenizer)
-        val_dataset = to_bag_dataset(val_df, tokenizer)
-        trainer = train(train_dataset, val_dataset, data_collator, tokenizer)
-
-    evaluate_on_test(trainer, test_dataset, test_df)
-
-    train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
-    save_user_embeddings(train_ids, train_embeddings, os.path.join(OUTPUT_DIR, "train_user_embeddings.pt"))
-
-    test_ids, test_embeddings = extract_user_embeddings(trainer.model, test_df, tokenizer, data_collator)
-    save_user_embeddings(test_ids, test_embeddings, os.path.join(OUTPUT_DIR, "test_user_embeddings.pt"))
+        cross_validate(bags_df, tokenizer, data_collator)
 
 
 if __name__ == "__main__":

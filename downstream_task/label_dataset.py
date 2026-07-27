@@ -3,6 +3,8 @@ import os
 import pandas as pd
 from tqdm import tqdm
 from synthetic_dataset.network_creation import read_edg_file
+from numpy import round, mean
+
 
 def load_df(path):
     sep = "\t" if path.endswith(".tsv") else ","
@@ -41,8 +43,7 @@ def label_users(dataframe, binary_label_name, post_separator, concatenate_posts)
             return grouped
 
 
-
-def label_by_connections(dataframe, edges, binary_label_name="binary_label"):
+def label_by_connections_threshold(dataframe, edges, binary_label_name="binary_label"):
     conn_dict = {}
     df_labels = dataframe.copy()
     df_labels.index = df_labels["account_id"]
@@ -63,37 +64,102 @@ def label_by_connections(dataframe, edges, binary_label_name="binary_label"):
                 flws = conn_dict[id]
                 risky_neighborhood_percentage = sum(flws) / len(flws) * 100
                 if risky_neighborhood_percentage > 25:
-                    #print("goddayum")
                     dataframe.at[index, binary_label_name] = 1
     return dataframe
 
-def build_network_lookup(edges):
-    d={}
+
+def label_by_network(edges, posts_df):
+    lt = {}
+
+    # Step 1: Write a dictionary with the nodes and their one-hop and two hops neighbors
     for ed in tqdm(edges, "First level..."):
-        if ed[0] in d:
-            d[ed[0]]["first_level"].append(ed[1])
+        if ed[0] in lt:
+            lt[ed[0]]["first_level"].append(ed[1])
         else:
-            d[ed[0]] = {"first_level": [ed[1]], "second_level": set()}
+            lt[ed[0]] = {"first_level": [ed[1]], "second_level": set()}
 
-    for node in tqdm(d, "Second level..."):
-        d[node]["second_level"] = set()
-        keyslist = set(d.keys())
-        for node_1 in d[node]["first_level"]:
+    for node in tqdm(lt, "Second level..."):
+        lt[node]["second_level"] = set()
+        keyslist = set(lt.keys())
+        for node_1 in lt[node]["first_level"]:
             if node_1 in keyslist:
-                for n2 in d[node_1]["first_level"]:
-                    d[node]["second_level"].add(n2)
-    """for node in tqdm(d, "Cleaning..."):
-        d[node]["first_level"] = set(d[node]["first_level"])
-        if node in d[node]["first_level"]:
-            d[node]["first_level"].remove(node)
-        if node in d[node]["second_level"]:
-            d[node]["second_level"].remove(node)
-        d[node]["second_level"] -= d[node]["first_level"]"""
-    return d
+                for n2 in lt[node_1]["first_level"]:
+                    lt[node]["second_level"].add(n2)
 
-def neighbor_based_labeling(df, network):
-    pass
+    for node in tqdm(lt, "Cleaning..."):
+        lt[node]["first_level"] = set(lt[node]["first_level"])
+        if node in lt[node]["first_level"]:
+            lt[node]["first_level"].remove(node)
+        if node in lt[node]["second_level"]:
+            lt[node]["second_level"].remove(node)
+        lt[node]["second_level"] -= lt[node]["first_level"]
 
+    # Step 2: for each user, calculate its label with this formula:
+    # l(u) = 1/N * sum_{p \in posts_u} ((l_p**2)/5)
+    # where N is the number of posts from that user
+
+    levels_df = posts_df.groupby("account_id")["exact_level_found"].agg(list).reset_index().set_index("account_id")
+
+    # Step 3: for each user in the lookup table, and its first and second level neighbors, convert their IDs with their label
+    weights = {
+        0: .1, 1: .1, 2: .2, 3: .5, 4: .75, 5: 1
+    }
+    users_content_based_labels = {}
+    for i, row in tqdm(levels_df.iterrows()):
+        users_content_based_labels[i] = sum([v*weights[v] for v in row["exact_level_found"]]) / sum(weights[v] for v in row["exact_level_found"])
+
+    labels_dict = {}
+    for j in tqdm(list(lt.keys())):
+        labels_dict[j] = {"zero_level": users_content_based_labels[j], "first_level": [], "second_level": []}
+        labels_1_neighbor = []
+        labels_2_neighbor = []
+        for node in lt[j]["first_level"]:
+            labels_1_neighbor.append(users_content_based_labels[node])
+        for node in lt[j]["second_level"]:
+            labels_2_neighbor.append(users_content_based_labels[node])
+        labels_dict[j]["first_level"] = labels_1_neighbor
+        labels_dict[j]["second_level"] = labels_2_neighbor
+
+    # Step 4: Recompute each user's score
+    final_labels_dict = {}
+    q = 2
+    for node in tqdm(list(labels_dict.keys())):
+        if int(round(labels_dict[node]["zero_level"])) != 5:
+            n_1_score = sum([v / q for v in labels_dict[node]["first_level"]])
+            n_2_score = sum([v / q**2 for v in labels_dict[node]["second_level"]])
+            if n_2_score == 0:
+                n2_value = 0
+            else:
+                n2_value = n_2_score / len(labels_dict[node]["second_level"])
+            final_labels_dict[node] = int(round(labels_dict[node]["zero_level"] + n_1_score / len(labels_dict[node]["first_level"]) + n2_value))
+        else:
+            final_labels_dict[node] = 5
+    for k in list(users_content_based_labels.keys()):
+        if k not in final_labels_dict:
+            final_labels_dict[k] = int(round(users_content_based_labels[k]))
+    print(len(final_labels_dict))
+
+    print("\nDistribution before considering the relations")
+    a = list(labels_dict.values())
+    a = [int(round(e["zero_level"])) for e in a]
+    for v in [0,1,2,3,4,5]:
+        print(a.count(v)/len(a)*100)
+
+    print("Distribution after considering the relations")
+    a = list(final_labels_dict.values())
+    for v in [0, 1, 2, 3, 4, 5]:
+        print(a.count(v) / len(a) * 100)
+
+    df = pd.DataFrame(final_labels_dict.items(), columns=["account_id", "exact_level_found"])
+    return df
+
+
+
+def pagerank_based(d_labels):
+    di = {}
+    alpha = 0.7
+    for node in d_labels:
+        di[node] = alpha * d_labels[node]["zero_level"] + (1 - alpha) * mean(d_labels[node]["first_level"])
 
 if __name__ == "__main__":
     real_posts = "real_posts.tsv"
@@ -103,29 +169,30 @@ if __name__ == "__main__":
     synthetic_social_network = "dataset/synthetic_social_network.edg"
     real_social_network = "dataset/real_social_network.edg"
 
+    real_or_synthetic = "synthetic"
+    labeling_procedure = "by_network"
+
     # REAL DATASET
-    real = load_df(real_posts)
+    real_posts_df = load_df(real_posts)
     real_edges = read_edg_file(real_social_network, type_pairs="list")
-    lt_path = os.path.join("dataset", "lookup_table.pkl")
-    if not os.path.exists(lt_path):
-        lt = build_network_lookup(real_edges)
-        with open("dataset/lookup_table.pkl", "wb") as f:
-            pickle.dump(lt, f)
+
+    # SYNTHETIC DATASET
+    synthetic_posts_df = load_df(synthetic_posts)
+    synthetic_edges = read_edg_file(synthetic_social_network, type_pairs="list")
+
+    if real_or_synthetic == "real":
+        edges = real_edges
+        posts = real_posts_df
     else:
-        with open("dataset/lookup_table.pkl", "rb") as f:
-            lt = pickle.load(f)
+        edges = synthetic_edges
+        posts = synthetic_posts_df
+    if labeling_procedure == "by_network":
+        labeled = label_by_network(edges=edges, posts_df=posts)
+    elif labeling_procedure == "by_max":
+        labeled = label_users(real_posts_df, binary_label_name, post_separator=post_separator, concatenate_posts=None)
 
-    posts_df = pd.read_csv(real_posts, sep="\t")
-    levels_df = posts_df.groupby("account_id")["exact_level_found"].agg(list).reset_index().set_index("account_id")
-    d_labels = {}
-    for i, row in tqdm(levels_df.iterrows()):
-        d_labels[i] = sum([(v**2)/5 for v in row["exact_level_found"]])/len(row["exact_level_found"])
-   #TODO ARROTONDARE I VALORI
-
-
-    """real_labeled = label_users(real, binary_label_name, post_separator=post_separator)
-    real_labeled = label_by_connections(real_labeled, real_edges)
-    real_labeled.to_csv("dataset/real_users.tsv", sep="\t", index=False)"""
+    labeled = labeled.rename(columns={"exact_level_found": "label"})
+    labeled.to_csv(f"dataset/labeling/{labeling_procedure}/{real_or_synthetic}_users.tsv", sep="\t", index=False)
 
     '''
     # SYNTHETIC DATASET
