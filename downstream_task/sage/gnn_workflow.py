@@ -1,8 +1,10 @@
 from os.path import join, exists
+from os import makedirs
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, root_mean_squared_error, mean_absolute_error
+
 from sklearn.utils.class_weight import compute_class_weight
 from torch_geometric.loader import NeighborLoader
 import yaml
@@ -144,6 +146,7 @@ if __name__ == "__main__":
     lr = float(model_params["lr"])
     ne_dim = model_params["ne_dim"]
 
+    print(f"MODE: {mode}, DF PATH: {df_path}")
     features = torch.load(features_path.format(mode))
     full_df = pd.read_csv(df_path, sep="\t")
     features_dict = {}
@@ -154,12 +157,13 @@ if __name__ == "__main__":
 
     n_classes = df[field_label].nunique()
     training_weights = torch.tensor(
-        compute_class_weight(class_weight="balanced", classes=np.arange(n_classes), y=df["exact_level_found"]),
-        #np.ones(6),
+        compute_class_weight(class_weight="balanced", classes=np.arange(n_classes), y=df[field_label]),
         dtype=torch.float,
     )
 
-    sizes = [2, 3]
+    sizes = [10, 5]
+    if not exists(dir_models):
+        makedirs(dir_models)
     model = get_model(df=df, model_dir=dir_models, ne_dim=ne_dim, we_dim=768, batch_size=batch_size,
                       edge_path=train_network_path, epochs=epochs, features_dict=features_dict,
                       sizes=sizes, aggregation="xlmt_attm_pooled", field_name_id=field_id,
@@ -180,6 +184,9 @@ if __name__ == "__main__":
     df = full_df.set_index("account_id").loc[ids_to_predict]
     y_true = df[field_label].tolist()
     print(classification_report(y_pred=y_pred, y_true=y_true))
+    se = 0
+    print("RMSE: ", root_mean_squared_error(y_true=y_true, y_pred=y_pred))
+    print("MAE: ", mean_absolute_error(y_true=y_true, y_pred=y_pred))
     if mode == "test":
         ftdict = features_dict.copy()
         ids_to_predict = ftdict.keys()
@@ -197,4 +204,5 @@ if __name__ == "__main__":
 
         df = df.set_index("account_id").loc[ids_to_predict]
         y_true = df[field_label].tolist()
+
         print(classification_report(y_pred=y_pred, y_true=y_true))

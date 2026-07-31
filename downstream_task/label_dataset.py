@@ -162,14 +162,14 @@ def pagerank_based(d_labels):
         di[node] = alpha * d_labels[node]["zero_level"] + (1 - alpha) * mean(d_labels[node]["first_level"])
 
 if __name__ == "__main__":
-    real_posts = "real_posts.tsv"
+    real_posts = "real_posts_capped_64.tsv"
     synthetic_posts = "synthetic_posts.tsv"
     binary_label_name = "binary_label"
     post_separator = "  "
     synthetic_social_network = "dataset/synthetic_social_network.edg"
     real_social_network = "dataset/real_social_network.edg"
 
-    real_or_synthetic = "synthetic"
+    real_or_synthetic = "real"
     labeling_procedure = "by_network"
 
     # REAL DATASET
@@ -192,6 +192,7 @@ if __name__ == "__main__":
         labeled = label_users(real_posts_df, binary_label_name, post_separator=post_separator, concatenate_posts=None)
 
     labeled = labeled.rename(columns={"exact_level_found": "label"})
+    labeled["label"] = labeled["label"].replace(6, 5)
     labeled.to_csv(f"dataset/labeling/{labeling_procedure}/{real_or_synthetic}_users.tsv", sep="\t", index=False)
 
     '''

@@ -1,13 +1,14 @@
 import json
 import logging
 import os
-
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import yaml
 from datasets import Dataset
-from sklearn.metrics import accuracy_score, classification_report, precision_recall_fscore_support
+from sklearn.metrics import accuracy_score, classification_report, precision_recall_fscore_support, mean_absolute_error, root_mean_squared_error
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
@@ -24,23 +25,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-HOME_DIR = "/lustrehome/benedettifrancescophd/"
+PARAMETERS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parameters_xlmt.yaml")
+with open(PARAMETERS_PATH, "r") as _f:
+    _config = yaml.safe_load(_f)
 
-MODEL_NAME = os.path.join(HOME_DIR, "models/roberta-xlmt")
-DATA_PATH = os.path.join(HOME_DIR, "gab_analysis/downstream_task/real_posts_capped_64.tsv")
-OUTPUT_DIR = os.path.join(HOME_DIR, "gab_analysis/xlmt_finetuned", "model_attention_pooling_network_labeling_real")
-LABELS_DF_NAME = os.path.join(HOME_DIR, "gab_analysis/downstream_task/real_users_capped.tsv")
-PREDICT_OUTPUT_PATH = os.path.join(OUTPUT_DIR, "test_predictions.tsv")
-TEXT_COLUMN = "content"
-POST_LABEL_COLUMN = "exact_level_found"
-ACCOUNT_LABEL_COLUMN = "label"
-PREDICTION_COLUMN = "predicted_by_xlmt"
-NUM_LABELS = 6
-MAX_LENGTH = 512
-MAX_POSTS_PER_USER = 64
-TRAIN_FRAC, VAL_FRAC, TEST_FRAC = 0.7, 0.15, 0.15
-SEED = 42
-N_FOLDS = 10
+_paths = _config["paths"]
+_columns = _config["columns"]
+_training = _config["training"]
+
+HOME_DIR = _paths["home_dir"]
+
+MODEL_NAME = os.path.join(HOME_DIR, _paths["model_name"])
+REAL_DATA_PATH = os.path.join(HOME_DIR, _paths["real_data_path"])
+SYNTHETIC_DATA_PATH = os.path.join(HOME_DIR, _paths["synthetic_data_path"])
+OUTPUT_DIR = os.path.join(HOME_DIR, _paths["output_dir_parent"], _paths["output_dir_name"])
+REAL_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["real_labels_df_name"])
+SYNTHETIC_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["synthetic_labels_df_name"])
+PREDICT_OUTPUT_PATH = os.path.join(OUTPUT_DIR, _paths["predict_output_filename"])
+TEXT_COLUMN = _columns["text_column"]
+POST_LABEL_COLUMN = _columns["post_label_column"]
+ACCOUNT_LABEL_COLUMN = _columns["account_label_column"]
+PREDICTION_COLUMN = _columns["prediction_column"]
+NUM_LABELS = _training["num_labels"]
+MAX_LENGTH = _training["max_length"]
+MAX_POSTS_PER_USER = _training["max_posts_per_user"]
+TRAIN_FRAC, VAL_FRAC, TEST_FRAC = _training["train_frac"], _training["val_frac"], _training["test_frac"]
+SEED = _training["seed"]
+N_FOLDS = _training["n_folds"]
+MODE = _training["mode"]
+CROSS_VAL = _training["cross_val"]
+
 
 
 def is_main_process() -> bool:
@@ -76,26 +90,16 @@ def report_posts_per_user(bags_df: pd.DataFrame) -> None:
     )
 
 
-def _cap_posts(group: pd.DataFrame, cap: int, label: int, rng: np.random.Generator, aggregator: str = "max") -> list:
+def _cap_posts(group: pd.DataFrame, cap: int, rng: np.random.Generator) -> list:
     if len(group) <= cap:
         return group[TEXT_COLUMN].astype(str).tolist()
 
-    if aggregator == "max":
-        # always keep a post that actually justifies the max-based label, then fill the rest
-        # randomly - a naive uniform sample could drop the one post the label depends on
-        max_idx = group.index[group[POST_LABEL_COLUMN] == label].to_numpy()
-        keep_idx = rng.choice(max_idx, size=1, replace=False)
-        remaining_idx = np.setdiff1d(group.index.to_numpy(), keep_idx)
-        extra_idx = rng.choice(remaining_idx, size=cap - 1, replace=False)
-        chosen_idx = np.concatenate([keep_idx, extra_idx])
-    else:
-        chosen_idx = rng.choice(group.index.to_numpy(), size=cap, replace=False)
+    chosen_idx = rng.choice(group.index.to_numpy(), size=cap, replace=False)
 
     return group.loc[chosen_idx, TEXT_COLUMN].astype(str).tolist()
 
 
-def load_user_bags(path: str, labels_df: pd.DataFrame = None, max_posts_per_user: int = MAX_POSTS_PER_USER, seed: int = SEED, aggregator: str = "max") -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t")
+def load_user_bags(df, labels_df, max_posts_per_user=MAX_POSTS_PER_USER, seed=SEED) -> pd.DataFrame:
     df = df.dropna(subset=["account_id", TEXT_COLUMN, POST_LABEL_COLUMN])
     labels_accounts = labels_df["account_id"].tolist()
     df = df[df["account_id"].isin(labels_accounts)]
@@ -110,7 +114,7 @@ def load_user_bags(path: str, labels_df: pd.DataFrame = None, max_posts_per_user
     dropped = 0
     for account_id, group in df.groupby("account_id"):
         label = int(group[POST_LABEL_COLUMN].max()) if not labels_dict else labels_dict[account_id]
-        posts = _cap_posts(group, max_posts_per_user, label, rng, aggregator)
+        posts = _cap_posts(group, max_posts_per_user, rng)
         if not posts:
             dropped += 1
             continue
@@ -130,7 +134,9 @@ def split_bags(bags_df: pd.DataFrame, test_account_ids: list = None) -> tuple[pd
     If test_account_ids is given, that exact set of accounts becomes the test split (so
     the test set stays fixed across runs/strategies) and only train/val get split here.
     """
+    bags_df = bags_df.sort_values("account_id").reset_index(drop=True)
     if test_account_ids is not None:
+        logger.info(f"COLUMNS: {bags_df.columns}")
         test_mask = bags_df["account_id"].isin(test_account_ids)
         test_df = bags_df[test_mask]
         train_val_df = bags_df[~test_mask]
@@ -283,11 +289,15 @@ def compute_metrics(eval_pred) -> dict:
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=-1)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="macro", zero_division=0)
+    mae = mean_absolute_error(labels, preds)
+    rmse = root_mean_squared_error(labels, preds)
     return {
         "accuracy": accuracy_score(labels, preds),
         "f1_macro": f1,
         "precision_macro": precision,
         "recall_macro": recall,
+        "mae": mae,
+        "rmse": rmse,
     }
 
 
@@ -323,7 +333,7 @@ def _training_args(output_dir: str) -> TrainingArguments:
         output_dir=output_dir,
         eval_strategy="epoch",
         save_strategy="no",  # explicit save below - Trainer's own checkpointing for a non-PreTrainedModel falls back to undocumented behavior
-        train_sampling_strategy ="group_by_length",
+        group_by_length=True,
         length_column_name="length",
         num_train_epochs=5,
         per_device_train_batch_size=4,  # lower than a flat-sequence setup: cost now scales with batch_size x posts_per_bag x tokens_per_post
@@ -396,23 +406,66 @@ def _average_fold_metrics(fold_metrics: list) -> dict:
     return summary
 
 
+def _average_classification_reports(fold_reports: list) -> dict:
+    """Averages sklearn classification_report(output_dict=True) dicts across folds.
+
+    Every fold's report must cover the same set of row keys (pass
+    labels=np.arange(NUM_LABELS) to classification_report so folds where a class has
+    zero support still get a row - otherwise per-class rows would go missing/misaligned
+    across folds and this would KeyError).
+    """
+    summary = {}
+    for key, value in fold_reports[0].items():
+        if isinstance(value, dict):
+            summary[key] = {
+                metric: {
+                    "mean": float(np.mean([r[key][metric] for r in fold_reports])),
+                    "std": float(np.std([r[key][metric] for r in fold_reports])),
+                }
+                for metric in value
+            }
+        else:  # "accuracy" is a bare float, not a nested dict
+            values = np.array([r[key] for r in fold_reports])
+            summary[key] = {"mean": float(values.mean()), "std": float(values.std())}
+    return summary
+
+
+def _format_classification_report_summary(summary: dict) -> str:
+    rows = [k for k in summary if k != "accuracy"]
+    lines = [f"{'':>15}{'precision':>16}{'recall':>16}{'f1-score':>16}{'support':>16}"]
+    for row in rows:
+        cells = "".join(
+            f"{summary[row][metric]['mean']:>9.3f} ± {summary[row][metric]['std']:<5.3f}"
+            for metric in ("precision", "recall", "f1-score", "support")
+        )
+        lines.append(f"{row:>15}{cells}")
+    if "accuracy" in summary:
+        acc = summary["accuracy"]
+        lines.append(f"\n{'accuracy':>15}{acc['mean']:>9.3f} ± {acc['std']:<5.3f}")
+    return "\n".join(lines)
+
+
 def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagCollator, n_folds: int = N_FOLDS) -> list:
     """Repeats the main() train/eval pipeline over n_folds stratified folds.
 
     Same model, tokenization and training args as train() for each fold. The only
     difference from that pipeline is that validation loss is computed with balanced
     class weights (derived from the fold's own train split) to account for label
-    imbalance, since the plain unweighted loss used by train()/evaluate_on_test()
-    would let majority classes dominate the reported eval loss.
+    imbalance
     """
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
     labels = bags_df[ACCOUNT_LABEL_COLUMN].to_numpy()
 
     fold_metrics = []
+    fold_reports = []
     for fold, (train_idx, val_idx) in enumerate(skf.split(bags_df, labels), start=1):
         logger.info("Cross-validation fold %d/%d", fold, n_folds)
+        fold_output_dir = os.path.join(OUTPUT_DIR, "cross_validation", f"fold_{fold}")
+        os.makedirs(fold_output_dir, exist_ok=True)
         train_df = bags_df.iloc[train_idx].reset_index(drop=True)
         val_df = bags_df.iloc[val_idx].reset_index(drop=True)
+        train_df.to_csv(os.path.join(fold_output_dir, "train.tsv"), sep="\t", index=False)
+        val_df.to_csv(os.path.join(fold_output_dir, "test.tsv"), sep="\t", index=False)
 
         train_dataset = to_bag_dataset(train_df, tokenizer)
         val_dataset = to_bag_dataset(val_df, tokenizer)
@@ -421,7 +474,6 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
         class_weights = _balanced_class_weights(train_df[ACCOUNT_LABEL_COLUMN].to_numpy())
         model = build_model(class_weights=class_weights)
 
-        fold_output_dir = os.path.join(OUTPUT_DIR, "cross_validation", f"fold_{fold}")
         trainer = Trainer(
             model=model,
             args=_training_args(fold_output_dir),
@@ -432,13 +484,28 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
         )
         trainer.train()
 
-        metrics = trainer.evaluate()
+        # trainer.predict is a collective call under DDP - must run on all ranks. It's used instead of trainer.evaluate()
+        # because it also returns raw logits/labels, needed below to build a per-fold classification report (evaluate()
+        # only returns whatever compute_metrics returns).
+        predictions = trainer.predict(val_dataset, metric_key_prefix="eval")
+        metrics = predictions.metrics
         logger.info("Fold %d metrics: %s", fold, metrics)
         fold_metrics.append(metrics)
 
         # extract_user_embeddings/save run a plain (non-DDP) forward pass - restrict to
         # rank 0 to avoid every rank redoing the same inference and racing on the same files
         if trainer.is_world_process_zero():
+            val_preds = np.argmax(predictions.predictions, axis=-1)
+            report = classification_report(
+                predictions.label_ids, val_preds, labels=np.arange(NUM_LABELS), output_dict=True, zero_division=0
+            )
+            logger.info(
+                "Fold %d classification report:\n%s",
+                fold,
+                classification_report(predictions.label_ids, val_preds, labels=np.arange(NUM_LABELS), zero_division=0),
+            )
+            fold_reports.append(report)
+
             train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
             save_user_embeddings(train_ids, train_embeddings, os.path.join(fold_output_dir, "train_user_embeddings.pt"))
 
@@ -449,6 +516,14 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
 
     summary = _average_fold_metrics(fold_metrics)
     logger.info("Cross-validation summary over %d folds: %s", n_folds, summary)
+
+    if fold_reports:  # only rank 0 collects these (see is_world_process_zero() above)
+        report_summary = _average_classification_reports(fold_reports)
+        logger.info(
+            "Cross-validation mean classification report over %d folds:\n%s",
+            n_folds,
+            _format_classification_report_summary(report_summary),
+        )
 
     return fold_metrics
 
@@ -504,6 +579,9 @@ def evaluate_on_test(trainer: Trainer, test_dataset: Dataset, test_df: pd.DataFr
     logger.info("Classification report")
     logger.info(classification_report(true_labels, preds))
 
+    logger.info(f"MAE: {mean_absolute_error(true_labels, preds)}")
+    logger.info(f"RMSE: {root_mean_squared_error(true_labels, preds)}")
+
     logger.info("Binary classification report")
     logger.info(classification_report(binary_true_labels, binary_preds))
 
@@ -515,26 +593,43 @@ def evaluate_on_test(trainer: Trainer, test_dataset: Dataset, test_df: pd.DataFr
 
 
 def main() -> None:
-    CROSS_VAL = False
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     data_collator = UserBagCollator(tokenizer)
-    aggregator = "attention"
+
+
+    real_posts_df = pd.read_csv(REAL_DATA_PATH, sep="\t")
+    synthetic_posts_df = pd.read_csv(SYNTHETIC_DATA_PATH, sep="\t")
+    real_labels_df = pd.read_csv(REAL_LABELS_DF_NAME, sep="\t")
+    synthetic_labels_df = pd.read_csv(SYNTHETIC_LABELS_DF_NAME, sep="\t")
+    if MODE == "r":
+        data_df = real_posts_df
+        labels_df = real_labels_df
+    elif MODE == "s":
+        data_df = synthetic_posts_df
+        labels_df = synthetic_labels_df
+    elif MODE == "rs":
+        data_df = pd.concat([real_posts_df, synthetic_posts_df])
+        if "Unnamed: 0" in data_df.columns:
+            data_df = data_df.drop(columns="Unnamed: 0")
+        labels_df = pd.concat([real_labels_df, synthetic_labels_df])
 
     if is_main_process():
-        report_token_lengths(pd.read_csv(DATA_PATH, sep="\t").dropna(subset=[TEXT_COLUMN]), tokenizer)
+        report_token_lengths(data_df.dropna(subset=[TEXT_COLUMN]), tokenizer)
 
-    labels_df = pd.read_csv(LABELS_DF_NAME, sep="\t")
-    bags_df = load_user_bags(DATA_PATH, labels_df=labels_df, aggregator=aggregator)
+    bags_df = load_user_bags(data_df, labels_df=labels_df)
 
     if not CROSS_VAL:
         test_ids_path = os.path.join(OUTPUT_DIR, "test_account_ids.tsv")
         if os.path.exists(test_ids_path):
+            logger.info("\nTEST IDS EXIST")
             test_account_ids = pd.read_csv(test_ids_path, sep="\t")["account_id"].tolist()
             train_df, val_df, test_df = split_bags(bags_df, test_account_ids=test_account_ids)
+            logger.info(f"\nLENGTH OF LOADED TEST DATASET: {len(test_df)}")
         else:
             train_df, val_df, test_df = split_bags(bags_df)
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             test_df[["account_id"]].to_csv(test_ids_path, sep="\t", index=False)
+            logger.info(f"\nLENGTH OF CREATED TEST DATASET: {len(test_df)}")
         test_dataset = to_bag_dataset(test_df, tokenizer)
 
         if model_exists(OUTPUT_DIR):
@@ -555,6 +650,7 @@ def main() -> None:
             test_ids, test_embeddings = extract_user_embeddings(trainer.model, test_df, tokenizer, data_collator)
             save_user_embeddings(test_ids, test_embeddings, os.path.join(OUTPUT_DIR, "test_user_embeddings.pt"))
     else:
+        logger.info("CROSS VALIDATING...")
         cross_validate(bags_df, tokenizer, data_collator)
 
 
