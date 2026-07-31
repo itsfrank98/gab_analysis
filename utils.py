@@ -129,8 +129,6 @@ def plot_n_distributions(ld, political_leanings, legend, width, dst):
     plt.show()
 
 
-
-
 if __name__ == "__main__":
     type_plot = "line"
     dim = 1500

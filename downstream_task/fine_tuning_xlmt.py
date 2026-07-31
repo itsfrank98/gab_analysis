@@ -305,23 +305,33 @@ def model_exists(path: str) -> bool:
     return os.path.isfile(os.path.join(path, "model_state_dict.pt"))
 
 
-def load_trainer(model_path: str, data_collator: UserBagCollator) -> Trainer:
+def load_trainer(
+    model_path: str,
+    data_collator: UserBagCollator,
+    training_args: TrainingArguments | None = None,
+    train_dataset: Dataset | None = None,
+    eval_dataset: Dataset | None = None,
+) -> Trainer:
     logger.info("Loading fine-tuned model from %s", model_path)
-    model = build_model()
     state_dict = torch.load(os.path.join(model_path, "model_state_dict.pt"), map_location="cpu")
+
+    model = build_model(class_weights=torch.zeros(NUM_LABELS))
     model.load_state_dict(state_dict)
 
-    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    training_args = TrainingArguments(
-        output_dir=OUTPUT_DIR,
-        per_device_eval_batch_size=8,
-        report_to="none",
-        bf16=use_bf16,
-        fp16=torch.cuda.is_available() and not use_bf16,
-    )
+    if training_args is None:
+        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        training_args = TrainingArguments(
+            output_dir=OUTPUT_DIR,
+            per_device_eval_batch_size=8,
+            report_to="none",
+            bf16=use_bf16,
+            fp16=torch.cuda.is_available() and not use_bf16,
+        )
     return Trainer(
         model=model,
         args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
@@ -458,31 +468,57 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
 
     fold_metrics = []
     fold_reports = []
+    fold_binary_reports = []
+
     for fold, (train_idx, val_idx) in enumerate(skf.split(bags_df, labels), start=1):
         logger.info("Cross-validation fold %d/%d", fold, n_folds)
         fold_output_dir = os.path.join(OUTPUT_DIR, "cross_validation", f"fold_{fold}")
-        os.makedirs(fold_output_dir, exist_ok=True)
-        train_df = bags_df.iloc[train_idx].reset_index(drop=True)
-        val_df = bags_df.iloc[val_idx].reset_index(drop=True)
-        train_df.to_csv(os.path.join(fold_output_dir, "train.tsv"), sep="\t", index=False)
-        val_df.to_csv(os.path.join(fold_output_dir, "test.tsv"), sep="\t", index=False)
+
+        if os.path.exists(os.path.join(fold_output_dir, "train_ids.tsv")):
+            print("\nIDS EXIST")
+            train_ids = pd.read_csv(os.path.join(fold_output_dir, "train_ids.tsv"), sep="\t")
+            test_ids = pd.read_csv(os.path.join(fold_output_dir, "val_ids.tsv"), sep="\t")
+            train_ids = train_ids["account_id"].tolist()
+            test_ids = test_ids["account_id"].tolist()
+            train_df = bags_df[bags_df["account_id"].isin(train_ids)]
+            val_df = bags_df[bags_df["account_id"].isin(test_ids)]
+
+            #print(train_df.head())
+            #print("\n\n")
+            #print(val_df.head())
+        else:
+            os.makedirs(fold_output_dir, exist_ok=True)
+            train_df = bags_df.iloc[train_idx].reset_index(drop=True)
+            val_df = bags_df.iloc[val_idx].reset_index(drop=True)
+            train_df.to_csv(os.path.join(fold_output_dir, "train.tsv"), sep="\t", index=False)
+            val_df.to_csv(os.path.join(fold_output_dir, "test.tsv"), sep="\t", index=False)
 
         train_dataset = to_bag_dataset(train_df, tokenizer)
         val_dataset = to_bag_dataset(val_df, tokenizer)
         train_dataset = train_dataset.add_column("length", [len(ids) for ids in train_dataset["input_ids"]])
 
         class_weights = _balanced_class_weights(train_df[ACCOUNT_LABEL_COLUMN].to_numpy())
-        model = build_model(class_weights=class_weights)
 
-        trainer = Trainer(
-            model=model,
-            args=_training_args(fold_output_dir),
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            data_collator=data_collator,
-            compute_metrics=compute_metrics,
-        )
-        trainer.train()
+        if model_exists(fold_output_dir):
+            logger.info("Fold %d model exists, loading it instead of training", fold)
+            trainer = load_trainer(
+                fold_output_dir,
+                data_collator,
+                training_args=_training_args(fold_output_dir),
+                train_dataset=train_dataset,
+                eval_dataset=val_dataset,
+            )
+        else:
+            model = build_model(class_weights=class_weights)
+            trainer = Trainer(
+                model=model,
+                args=_training_args(fold_output_dir),
+                train_dataset=train_dataset,
+                eval_dataset=val_dataset,
+                data_collator=data_collator,
+                compute_metrics=compute_metrics,
+            )
+            trainer.train()
 
         # trainer.predict is a collective call under DDP - must run on all ranks. It's used instead of trainer.evaluate()
         # because it also returns raw logits/labels, needed below to build a per-fold classification report (evaluate()
@@ -506,13 +542,31 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
             )
             fold_reports.append(report)
 
-            train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
-            save_user_embeddings(train_ids, train_embeddings, os.path.join(fold_output_dir, "train_user_embeddings.pt"))
+            binary_preds = np.array([0 if p < 3 else 1 for p in val_preds])
+            binary_true_values = np.array([0 if p < 3 else 1 for p in predictions.label_ids])
+            binary_report = classification_report(
+                binary_true_values, binary_preds, labels=np.array([0, 1]), output_dict=True, zero_division=0
+            )
 
-            test_ids, test_embeddings = extract_user_embeddings(trainer.model, val_df, tokenizer, data_collator)
-            save_user_embeddings(test_ids, test_embeddings, os.path.join(fold_output_dir, "test_user_embeddings.pt"))
-            torch.save(trainer.model.state_dict(), os.path.join(fold_output_dir, "model_state_dict.pt"))
-            tokenizer.save_pretrained(fold_output_dir)
+            logger.info(
+                "\n\nFold %d binary classification report:\n%s",
+                fold,
+                binary_report,
+            )
+            fold_binary_reports.append(binary_report)
+
+            train_embeddings_dst = os.path.join(fold_output_dir, "train_user_embeddings.pt")
+            val_embeddings_dst = os.path.join(fold_output_dir, "test_user_embeddings.pt")
+            model_dst = os.path.join(fold_output_dir, "model_state_dict.pt")
+            if not os.path.exists(train_embeddings_dst):
+                train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
+                save_user_embeddings(train_ids, train_embeddings, train_embeddings_dst)
+            if not os.path.exists(val_embeddings_dst):
+                test_ids, test_embeddings = extract_user_embeddings(trainer.model, val_df, tokenizer, data_collator)
+                save_user_embeddings(test_ids, test_embeddings, val_embeddings_dst)
+            if not os.path.exists(model_dst):
+                torch.save(trainer.model.state_dict(), model_dst)
+                tokenizer.save_pretrained(fold_output_dir)
 
     summary = _average_fold_metrics(fold_metrics)
     logger.info("Cross-validation summary over %d folds: %s", n_folds, summary)
@@ -523,6 +577,14 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
             "Cross-validation mean classification report over %d folds:\n%s",
             n_folds,
             _format_classification_report_summary(report_summary),
+        )
+
+    if fold_binary_reports:  # only rank 0 collects these (see is_world_process_zero() above)
+        binary_report_summary = _average_classification_reports(fold_binary_reports)
+        logger.info(
+            "Cross-validation mean classification report over %d folds:\n%s",
+            n_folds,
+            _format_classification_report_summary(binary_report_summary),
         )
 
     return fold_metrics

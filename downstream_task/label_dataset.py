@@ -110,15 +110,18 @@ def label_by_network(edges, posts_df):
 
     labels_dict = {}
     for j in tqdm(list(lt.keys())):
-        labels_dict[j] = {"zero_level": users_content_based_labels[j], "first_level": [], "second_level": []}
-        labels_1_neighbor = []
-        labels_2_neighbor = []
-        for node in lt[j]["first_level"]:
-            labels_1_neighbor.append(users_content_based_labels[node])
-        for node in lt[j]["second_level"]:
-            labels_2_neighbor.append(users_content_based_labels[node])
-        labels_dict[j]["first_level"] = labels_1_neighbor
-        labels_dict[j]["second_level"] = labels_2_neighbor
+        if j in users_content_based_labels:
+            labels_dict[j] = {"zero_level": users_content_based_labels[j], "first_level": [], "second_level": []}
+            labels_1_neighbor = []
+            labels_2_neighbor = []
+            for node in lt[j]["first_level"]:
+                if node in users_content_based_labels:
+                    labels_1_neighbor.append(users_content_based_labels[node])
+            for node in lt[j]["second_level"]:
+                if node in users_content_based_labels:
+                    labels_2_neighbor.append(users_content_based_labels[node])
+            labels_dict[j]["first_level"] = labels_1_neighbor
+            labels_dict[j]["second_level"] = labels_2_neighbor
 
     # Step 4: Recompute each user's score
     final_labels_dict = {}
@@ -166,19 +169,19 @@ if __name__ == "__main__":
     synthetic_posts = "synthetic_posts.tsv"
     binary_label_name = "binary_label"
     post_separator = "  "
-    synthetic_social_network = "dataset/synthetic_social_network.edg"
+    synthetic_social_network = "dataset/synthetic_social_networkx4.edg"
     real_social_network = "dataset/real_social_network.edg"
 
-    real_or_synthetic = "real"
+    real_or_synthetic = "synthetic"
     labeling_procedure = "by_network"
 
     # REAL DATASET
     real_posts_df = load_df(real_posts)
-    real_edges = read_edg_file(real_social_network, type_pairs="list")
+    real_edges = read_edg_file(real_social_network, type_ids="str")
 
     # SYNTHETIC DATASET
     synthetic_posts_df = load_df(synthetic_posts)
-    synthetic_edges = read_edg_file(synthetic_social_network, type_pairs="list")
+    synthetic_edges = read_edg_file(synthetic_social_network, type_ids="str")
 
     if real_or_synthetic == "real":
         edges = real_edges
@@ -193,7 +196,8 @@ if __name__ == "__main__":
 
     labeled = labeled.rename(columns={"exact_level_found": "label"})
     labeled["label"] = labeled["label"].replace(6, 5)
-    labeled.to_csv(f"dataset/labeling/{labeling_procedure}/{real_or_synthetic}_users.tsv", sep="\t", index=False)
+    #labeled.to_csv(f"dataset/labeling/{labeling_procedure}/{real_or_synthetic}_users.tsv", sep="\t", index=False)
+    print(labeled["label"].value_counts()*100/len(labeled))
 
     '''
     # SYNTHETIC DATASET

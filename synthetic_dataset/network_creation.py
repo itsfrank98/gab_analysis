@@ -7,20 +7,21 @@ from openai import OpenAI
 from tqdm import tqdm
 
 
-def read_edg_file(path, type_pairs="list", mapper=None):
+def read_edg_file(path, type_ids="int", mapper=None):
     edges = []
     with open(path, "r") as f:
         for line in f.readlines():
-            n1, n2 = line.strip().split("\t")
-            n1 = int(n1)
-            n2 = int(n2)
+            k1, k2 = line.strip().split("\t")
+            if type_ids == "int":
+                k1 = int(k1)
+                k2 = int(k2)
             if mapper:
-                n1 = mapper[n1]
-                n2 = mapper[n2]
-            if type_pairs == "list":
-                edges.append([n1, n2])
-            elif type_pairs == "tuple":
-                edges.append((n1, n2))
+                if k1 in mapper and k2 in mapper:
+                    n1 = mapper[k1]
+                    n2 = mapper[k2]
+                    edges.append([n1, n2])
+            else:
+                edges.append([k1, k2])
     return edges
 
 def write_edg_file(edges, path):
