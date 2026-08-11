@@ -129,6 +129,45 @@ def plot_n_distributions(ld, political_leanings, legend, width, dst):
     plt.show()
 
 
+def _average_classification_reports(fold_reports: list) -> dict:
+    """Averages sklearn classification_report(output_dict=True) dicts across folds.
+
+    Every fold's report must cover the same set of row keys (pass
+    labels=np.arange(NUM_LABELS) to classification_report so folds where a class has
+    zero support still get a row - otherwise per-class rows would go missing/misaligned
+    across folds and this would KeyError).
+    """
+    summary = {}
+    for key, value in fold_reports[0].items():
+        if isinstance(value, dict):
+            summary[key] = {
+                metric: {
+                    "mean": float(np.mean([r[key][metric] for r in fold_reports])),
+                    "std": float(np.std([r[key][metric] for r in fold_reports])),
+                }
+                for metric in value
+            }
+        else:  # "accuracy" is a bare float, not a nested dict
+            values = np.array([r[key] for r in fold_reports])
+            summary[key] = {"mean": float(values.mean()), "std": float(values.std())}
+    return summary
+
+
+def _format_classification_report_summary(summary: dict) -> str:
+    rows = [k for k in summary if k != "accuracy"]
+    lines = [f"{'':>15}{'precision':>16}{'recall':>16}{'f1-score':>16}{'support':>16}"]
+    for row in rows:
+        cells = "".join(
+            f"{summary[row][metric]['mean']:>9.3f} ± {summary[row][metric]['std']:<5.3f}"
+            for metric in ("precision", "recall", "f1-score", "support")
+        )
+        lines.append(f"{row:>15}{cells}")
+    if "accuracy" in summary:
+        acc = summary["accuracy"]
+        lines.append(f"\n{'accuracy':>15}{acc['mean']:>9.3f} ± {acc['std']:<5.3f}")
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     type_plot = "line"
     dim = 1500

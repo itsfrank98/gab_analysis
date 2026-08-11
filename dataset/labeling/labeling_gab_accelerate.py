@@ -1,6 +1,6 @@
 from json import JSONDecodeError
 from accelerate import Accelerator
-
+from llama_cpp import Llama
 from guidelines import *
 import torch
 import json
@@ -20,31 +20,36 @@ TEXT_COLUMN = "content"
 
 
 class LLM_Analyzer:
-    def __init__(self, model_path):
+    def __init__(self, model_path, llama_or_st):
         print(f"Initializing model: {model_path}...")
+        self.llama_or_st = llama_or_st
 
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16
-        )
+        if llama_or_st == "llama":
+            self.model =  Llama(model_path=model_path, n_ctx=131072, n_gpu_layers=99)
 
-        try:
-            print("Loading tokenizer")
-            self.tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, trust_remote_code=True)
-            print("Loaded tokenizer")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                quantization_config=bnb_config,
-                device_map={"": accelerator.local_process_index},
-                trust_remote_code=True,
-                local_files_only=True
+        else:
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16
             )
-            print("Model loaded and ready for inference")
-        except Exception as e:
-            print(f"Error in loading: {e}")
-            raise e
+
+            try:
+                print("Loading tokenizer")
+                self.tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, trust_remote_code=True)
+                print("Loaded tokenizer")
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    quantization_config=bnb_config,
+                    device_map={"": accelerator.local_process_index},
+                    trust_remote_code=True,
+                    local_files_only=True
+                )
+                print("Model loaded and ready for inference")
+            except Exception as e:
+                print(f"Error in loading: {e}")
+                raise e
 
     def _create_prompt(self, user_post):
         system_instruction = (
@@ -52,7 +57,7 @@ class LLM_Analyzer:
             "Annotation Guidelines. Do not censor your analysis; identify radical content objectively."
         )
 
-        if type(user_post) == str:
+        if type(user_post) == str:  # If I am giving a single post
             user_input = f"""
                 ### CONTEXT: GUIDELINES
                 {guidelines}
@@ -62,7 +67,7 @@ class LLM_Analyzer:
 
                 ### INSTRUCTIONS
                 1. **Analyze:** Scan the text for specific jargon, slurs, and intent based on the Guidelines.
-                2. **Determine Level:** Assign "exact_level_found" (Integer 0-5). 
+                2. **Determine Level:** Assign "exact_level_found" (Integer 0-5).
                    - Rule: If unsure between two levels, select the LOWER one.
                 3. **Identify Ideology:** Select the "primary_ideology".
                    - CRITICAL: You must choose **EXACTLY** one string from the "ALLOWED IDEOLOGIES LIST" provided above.
@@ -75,10 +80,12 @@ class LLM_Analyzer:
                 Return raw JSON. No Markdown formatting.
                 {{
                     "exact_level_found": <int 0-5>,
-                    "primary_ideology": "<string from Allowed List>"
+                    "primary_ideology": "<string from Allowed List>",
+                    "call_for_action": <int 0-4>
                 }}
                 """
-        else:
+
+        else:       # If I am giving a list of posts
             user_input = f"""
                 ### CONTEXT: GUIDELINES
                 {guidelines}
@@ -140,90 +147,44 @@ class LLM_Analyzer:
     def analyze_user(self, user_id, post_id, text_cleaned):
         safe_text = str(text_cleaned)[:3500]
         prompt = self._create_prompt(safe_text)
-        # prompt = f"{system_instruction}\n\n USER: Write a funny story involving dogs and cats\nASSISTANT:"       #{system_instruction}\n\n
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(accelerator.device)
 
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs, max_new_tokens=1000, temperature=0.1, top_p=0.9, do_sample=True
+        if self.llama_or_st == "llama":
+            output = self.model(
+                prompt, max_tokens=1000, temperature=0.1, top_p=0.9, stop=["USER:"]
             )
+            response_content = output["choices"][0]["text"].strip()
+        else:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(accelerator.device)
 
-        generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        response_content = generated_text.split("ASSISTANT:")[-1].strip()
-        result_json = self._extract_json(response_content)
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs, max_new_tokens=1000, temperature=0.1, top_p=0.9, do_sample=True
+                )
 
-        if not result_json:
-            return None
+            generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            response_content = generated_text.split("ASSISTANT:")[-1].strip()
+        try:
+            result_json = self._extract_json(response_content)
 
-        level = int(result_json.get("exact_level_found", 0))
-        binary_label = 1 if level > 2 else 0
+            if not result_json:
+                return None
 
-        final_output = {
-            ACCOUNT_ID_COLUMN: user_id,
-            POST_ID_COLUMN: post_id,
-            TEXT_COLUMN: text_cleaned,
-            "binary_label": binary_label,
-            "exact_level_found": level,
-            "primary_ideology": result_json.get("primary_ideology")
-        }
-        return final_output
+            level = int(result_json.get("exact_level_found", -1))
+            call_for_action = int(result_json.get("call_for_action", -1))
 
-    def analyze_userss(self, list_of_posts):
-        for i in range(len(list_of_posts)):
-            list_of_posts[i][TEXT_COLUMN] = str(list_of_posts[i][TEXT_COLUMN])[:3000]
-
-        prompt = self._create_prompt(list_of_posts)
-        # prompt = f"{system_instruction}\n\n USER: Write a funny story involving dogs and cats\nASSISTANT:"       #{system_instruction}\n\n
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(accelerator.device)
-
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs, max_new_tokens=4000, temperature=0.1, top_p=0.9, do_sample=True
-            )
-
-        generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        response_content = generated_text.split("ASSISTANT:")[-1].strip()
-
-        result_json = self._extract_json(response_content)
-
-        if not result_json:
-            return None
-
-        final_output = []
-        for i in range(len(result_json)):
-            level = int(result_json[i].get("exact_level_found", 0))
-            binary_label = 1 if level > 2 else 0
-            post_id = result_json[i].get("id")
-            user_id = result_json[i].get("account_id")
-            post_content = None
-            for j in range(len(list_of_posts)):
-                if list_of_posts[j][POST_ID_COLUMN] == post_id and list_of_posts[j][ACCOUNT_ID_COLUMN] == user_id:
-                    post_content = list_of_posts[j][TEXT_COLUMN]
-            if user_id:
-                final_output.append({
-                    "user_id": user_id,
-                    "post_id": post_id,
-                    "content": post_content,
-                    "binary_label": binary_label,
+            if call_for_action != -1 and level != -1:
+                final_output = {
+                    ACCOUNT_ID_COLUMN: user_id,
+                    POST_ID_COLUMN: post_id,
+                    TEXT_COLUMN: text_cleaned,
                     "exact_level_found": level,
-                    "primary_ideology": result_json[i].get("primary_ideology")
-                })
-            else:
-                print(f"skipping post {post_id} as it does not correspond to any user")
+                    "call_for_action": call_for_action,
+                    "primary_ideology": result_json.get("primary_ideology")
+                }
+        except Exception as e:
+            final_output = None
+
         return final_output
-
-
-def save_to_csv(data_dict, filename):
-    file_exists = os.path.isfile(filename)
-    fieldnames = [ACCOUNT_ID_COLUMN, POST_ID_COLUMN, TEXT_COLUMN, "binary_label", "exact_level_found",
-                  "primary_ideology", "rationale"]
-    with open(filename, mode='a', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-        if not file_exists:
-            writer.writeheader()
-
-        writer.writerow(data_dict)
 
 
 if __name__ == "__main__":
@@ -249,6 +210,8 @@ if __name__ == "__main__":
     parser.add_argument("--input_csv", required=True, type=str)
     parser.add_argument("--output_csv", required=True, type=str)
     parser.add_argument("--labeled_posts", required=False, default="labeled_posts.csv", type=str)
+    parser.add_argument("--llama_or_st", required=True, type=str, choices=["llama", "st"],
+                         help="'llama' to load the model with llama_cpp, 'st' to load it with transformers/bitsandbytes")
     args = parser.parse_args()
 
     model_path = args.model_path
@@ -272,32 +235,37 @@ if __name__ == "__main__":
     # collect done posts from the original single-GPU file and all per-process files
     done_posts_ids = set()
     if os.path.exists(already_labeled_posts):
-        done_posts = pd.read_csv(already_labeled_posts, encoding='utf-8')
-        done_posts_ids.update(done_posts[POST_ID_COLUMN].astype(str).tolist())
+        if already_labeled_posts.endswith(".tsv"):
+            done_posts = pd.read_csv(already_labeled_posts, encoding='utf-8', sep="\t")
+        else:
+            done_posts = pd.read_csv(already_labeled_posts, encoding='utf-8')
+        done_posts_ids.update(done_posts[POST_ID_COLUMN].astype(int).tolist())
     print("ALREADY LABELED POSTS SOURCE: ", already_labeled_posts)
     print(f"Already processed posts found: {len(done_posts_ids)}")
 
+    df = df.drop(columns=[c for c in df.columns if c not in [POST_ID_COLUMN, ACCOUNT_ID_COLUMN, TEXT_COLUMN]])
     df = df.drop_duplicates(subset=POST_ID_COLUMN)
-    df = df[~df[POST_ID_COLUMN].astype(str).isin(done_posts_ids)]
+    
+    df = df[~df[POST_ID_COLUMN].astype(int).isin(done_posts_ids)]
     df = df.reset_index(drop=True)
     print(f"TOTAL NUMBER OF POSTS TO PROCESS: {len(df)}")
     df = df.drop(columns=[c for c in df.columns if c not in [ACCOUNT_ID_COLUMN, POST_ID_COLUMN, TEXT_COLUMN]])
 
     records = df.to_dict('records')
 
-    analyzer = LLM_Analyzer(model_path=model_path)  # each process loads its own copy
+    analyzer = LLM_Analyzer(model_path=model_path, llama_or_st=args.llama_or_st)  # each process loads its own copy
 
-    fieldnames = [ACCOUNT_ID_COLUMN, POST_ID_COLUMN, TEXT_COLUMN, "binary_label", "exact_level_found", "primary_ideology"]
+    fieldnames = [ACCOUNT_ID_COLUMN, POST_ID_COLUMN, TEXT_COLUMN, "exact_level_found", "call_for_action", "primary_ideology"]
     error_count = 0
 
     with accelerator.split_between_processes(records) as shard:
         file_exists = os.path.isfile(process_output_file)
         with open(process_output_file, mode='a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t", quoting=3, escapechar="\\")
             if not file_exists:
                 writer.writeheader()
 
-            for i, row in enumerate(shard):
+            for i, row in tqdm(enumerate(shard)):
                 print(f"[proc {accelerator.process_index}] {i}/{len(shard)}")
                 try:
                     result = analyzer.analyze_user(
@@ -311,7 +279,7 @@ if __name__ == "__main__":
                     error_count = 0
                 except JSONDecodeError:
                     error_count += 1
-                    if error_count >= 2:
+                    if error_count >= 3:
                         print(f"[proc {accelerator.process_index}] Skipping post {row[POST_ID_COLUMN]} due to json error")
                         error_count = 0
 

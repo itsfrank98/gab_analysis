@@ -411,7 +411,7 @@ def _average_fold_metrics(fold_metrics: list) -> dict:
     keys = fold_metrics[0].keys()
     summary = {}
     for key in keys:
-        values = np.array([m[key] for m in fold_metrics])
+        values = np.array([m[key] for m in fold_metrics if key in m])
         summary[key] = {"mean": float(values.mean()), "std": float(values.std())}
     return summary
 
@@ -532,21 +532,17 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
         # rank 0 to avoid every rank redoing the same inference and racing on the same files
         if trainer.is_world_process_zero():
             val_preds = np.argmax(predictions.predictions, axis=-1)
-            report = classification_report(
-                predictions.label_ids, val_preds, labels=np.arange(NUM_LABELS), output_dict=True, zero_division=0
-            )
+            report = classification_report(predictions.label_ids, val_preds, labels=np.arange(NUM_LABELS), output_dict=True, zero_division=0)
             logger.info(
                 "Fold %d classification report:\n%s",
                 fold,
-                classification_report(predictions.label_ids, val_preds, labels=np.arange(NUM_LABELS), zero_division=0),
+                report,
             )
             fold_reports.append(report)
 
             binary_preds = np.array([0 if p < 3 else 1 for p in val_preds])
             binary_true_values = np.array([0 if p < 3 else 1 for p in predictions.label_ids])
-            binary_report = classification_report(
-                binary_true_values, binary_preds, labels=np.array([0, 1]), output_dict=True, zero_division=0
-            )
+            binary_report = classification_report(binary_true_values, binary_preds, labels=np.array([0, 1]), output_dict=True, zero_division=0)
 
             logger.info(
                 "\n\nFold %d binary classification report:\n%s",
@@ -681,7 +677,7 @@ def main() -> None:
     bags_df = load_user_bags(data_df, labels_df=labels_df)
 
     if not CROSS_VAL:
-        test_ids_path = os.path.join(OUTPUT_DIR, "test_account_ids.tsv")
+        test_ids_path = os.path.join(OUTPUT_DIR, "val_ids.tsv")
         if os.path.exists(test_ids_path):
             logger.info("\nTEST IDS EXIST")
             test_account_ids = pd.read_csv(test_ids_path, sep="\t")["account_id"].tolist()

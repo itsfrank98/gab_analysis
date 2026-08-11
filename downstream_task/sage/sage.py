@@ -36,10 +36,10 @@ def create_graph(inv_map, features, edg_dir, df, field_name_id, field_name_label
             any predictions later computed on graph - use it to map predictions back to account_ids.
     """
     node_ids = list(inv_map.keys())
-    feats = [features[int(k)] for k in node_ids]
+    feats = [features[k] for k in node_ids]
     x = torch.Tensor(np.array(feats))
     if edgelist is None:
-        edgelist = read_edg_file(edg_dir, type_pairs="tuple", mapper=inv_map)
+        edgelist = read_edg_file(edg_dir, type_ids="str", mapper=inv_map)
     edges = np.array(list(zip(*edgelist)))
     if len(edges.shape) == 1:
         edges = np.zeros(shape=(2, 1))
@@ -66,7 +66,7 @@ class SAGE(torch.nn.Module):
             self.convs.append(SAGEConv(hidden_dim, hidden_dim, aggr="mean", normalize=True))
         self.output = SAGEConv(hidden_dim, n_classes, aggr="mean", normalize=True)
 
-    def forward(self, batch, inference=False, inference_for_embedding=False):
+    def forward(self, batch, inference_for_embedding=False):
         x = batch.x
         for i in range(len(self.convs)):
             x = self.convs[i](x, batch.edge_index)

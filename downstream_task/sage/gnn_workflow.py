@@ -1,16 +1,15 @@
+import os
 from os.path import join, exists
 from os import makedirs
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.metrics import classification_report, root_mean_squared_error, mean_absolute_error
-
 from sklearn.utils.class_weight import compute_class_weight
 from torch_geometric.loader import NeighborLoader
 import yaml
-
 from sage import SAGE, create_mappers, create_graph
-from utils import save_to_pickle, load_from_pickle
+from utils import save_to_pickle, load_from_pickle, _average_classification_reports, _format_classification_report_summary
 
 def get_model(model_dir, ne_dim, df, we_dim, batch_size, lr, edge_path, epochs, features_dict, sizes,
               aggregation, training_weights, field_name_id, field_name_label, loss, mod):
@@ -119,7 +118,7 @@ def get_predictions(model, ids_to_predict, full_features_dict, full_network_path
     pred_d = {}
     with torch.no_grad():
         for batch in loader:
-            out = model(batch, inference=True).cpu().numpy()
+            out = model(batch).cpu().numpy()
             seed_preds = np.argmax(out[:batch.batch_size], axis=1)
             seed_node_ids = batch.n_id[:batch.batch_size].cpu().numpy()
             for pred, gidx in zip(seed_preds, seed_node_ids):
@@ -128,13 +127,15 @@ def get_predictions(model, ids_to_predict, full_features_dict, full_network_path
 
 
 if __name__ == "__main__":
+    NUM_LABELS = 6
+
     with open("parameters.yaml", "r") as f:
         config = yaml.safe_load(f)
     dataset_params = config["dataset_params"]
+    cv_params = config["cv_params"]
+
     mode = dataset_params["mode"]
-    features_path = dataset_params["features_path"]
     df_path = dataset_params["df_path"]
-    train_network_path = dataset_params["train_social_net"]
     full_network_path = dataset_params["full_social_net"]
     field_label = dataset_params["field_label"]
     field_id = dataset_params["field_id"]
@@ -146,63 +147,81 @@ if __name__ == "__main__":
     lr = float(model_params["lr"])
     ne_dim = model_params["ne_dim"]
 
-    print(f"MODE: {mode}, DF PATH: {df_path}")
-    features = torch.load(features_path.format(mode))
-    full_df = pd.read_csv(df_path, sep="\t")
-    features_dict = {}
-    for k, v in zip(features[field_id], features["embeddings"]):
-        features_dict[k] = v
+    perform_cv = cv_params["perform_cv"]
+    cv_source = cv_params["cv_source"]
+    n_folds = cv_params["n_folds"]
 
-    df = full_df[full_df[field_id].isin(features_dict.keys())].reset_index(drop=True)   # will either contain only the training nodes or only the test nodes
+    classification_reports = []
+    binary_classification_reports = []
+    maes, rmses = [], []
+    if perform_cv:
+        print(f"MODE: {mode}, DF PATH: {df_path}")
+        for d in range(n_folds):
+            print(f"FOLD: {d+1}")
+            train_features_src = os.path.join(cv_source, f"fold_{d+1}", "train_user_embeddings.pt")
+            test_features_src = os.path.join(cv_source, f"fold_{d+1}", "test_user_embeddings.pt")
+            train_network_path = os.path.join(cv_source, f"fold_{d+1}", "train_network.edg")
+            dir_models_fold = os.path.join(dir_models, f"fold_{d+1}")
+            train_features = torch.load(train_features_src)
 
-    n_classes = df[field_label].nunique()
-    training_weights = torch.tensor(
-        compute_class_weight(class_weight="balanced", classes=np.arange(n_classes), y=df[field_label]),
-        dtype=torch.float,
-    )
+            full_df = pd.read_csv(df_path, sep="\t")
+            train_features_dict = {}
+            for k, v in zip(train_features[field_id], train_features["embeddings"]):
+                train_features_dict[k] = v
 
-    sizes = [10, 5]
-    if not exists(dir_models):
-        makedirs(dir_models)
-    model = get_model(df=df, model_dir=dir_models, ne_dim=ne_dim, we_dim=768, batch_size=batch_size,
-                      edge_path=train_network_path, epochs=epochs, features_dict=features_dict,
-                      sizes=sizes, aggregation="xlmt_attm_pooled", field_name_id=field_id,
-                      field_name_label=field_label, loss="weighted", training_weights=training_weights, lr=lr, mod=mode)
-    features_test = torch.load(features_path.format("test"))
-    ftdict = features_test.copy()
-    ids_to_predict = list(ftdict[field_id])
-    test_features_dict = {}
-    for k, v in zip(features_test[field_id], features_test["embeddings"]):
-        test_features_dict[k] = v
-    features_dict.update(test_features_dict)
-    preds = get_predictions(model, ids_to_predict=ids_to_predict, full_features_dict=features_dict,
-                            full_network_path=full_network_path, field_name_id=field_id, df=df,
-                            sizes=sizes, batch_size=batch_size)
+            train_df = full_df[full_df[field_id].isin(train_features_dict.keys())].reset_index(drop=True)
+            training_weights = torch.tensor(
+                compute_class_weight(class_weight="balanced", classes=np.arange(NUM_LABELS), y=train_df[field_label]),
+                dtype=torch.float,
+            )
 
-    y_pred = [preds[i] for i in ids_to_predict]
+            sizes = [10, 5]
+            if not exists(dir_models_fold):
+                makedirs(dir_models_fold)
+            model = get_model(df=train_df, model_dir=dir_models, ne_dim=ne_dim, we_dim=768, batch_size=batch_size,
+                              edge_path=train_network_path, epochs=epochs, features_dict=train_features_dict,
+                              sizes=sizes, aggregation="xlmt_attm_pooled", field_name_id=field_id,
+                              field_name_label=field_label, loss="weighted", training_weights=training_weights, lr=lr, mod="train")
 
-    df = full_df.set_index("account_id").loc[ids_to_predict]
-    y_true = df[field_label].tolist()
-    print(classification_report(y_pred=y_pred, y_true=y_true))
-    se = 0
-    print("RMSE: ", root_mean_squared_error(y_true=y_true, y_pred=y_pred))
-    print("MAE: ", mean_absolute_error(y_true=y_true, y_pred=y_pred))
-    if mode == "test":
-        ftdict = features_dict.copy()
-        ids_to_predict = ftdict.keys()
-        train_features = torch.load(features_path.format("train"))
-        #features = features_dict
-        train_features_dict = {}
-        for k, v in zip(train_features[field_id], train_features["embeddings"]):
-            train_features_dict[k] = v
-        features_dict.update(train_features_dict)
-        #full_network_path=train_network_path
-        preds = get_predictions(model, ids_to_predict=ids_to_predict, full_features_dict=features_dict,
-                                full_network_path=full_network_path, field_name_id=field_id, df=df,
-                                sizes=sizes, batch_size=batch_size)
-        y_pred = [preds[i] for i in ids_to_predict]
+            test_features = torch.load(test_features_src)
+            ftdict = test_features.copy()
+            ids_to_predict = list(ftdict[field_id])
+            test_features_dict = {}
+            for k, v in zip(test_features[field_id], test_features["embeddings"]):
+                test_features_dict[k] = v
+            test_features.update(test_features_dict)
+            preds = get_predictions(model, ids_to_predict=ids_to_predict, full_features_dict=test_features_dict,
+                                    full_network_path=full_network_path, field_name_id=field_id, df=train_df,
+                                    sizes=sizes, batch_size=batch_size)
 
-        df = df.set_index("account_id").loc[ids_to_predict]
-        y_true = df[field_label].tolist()
+            test_df = full_df.set_index("account_id").loc[ids_to_predict]
+            y_pred = [preds[i] for i in ids_to_predict]
+            y_true = test_df[field_label].tolist()
+            report = classification_report(y_pred=y_pred, y_true=y_true, labels=np.arange(NUM_LABELS), output_dict=True, zero_division=0)
+            mae = mean_absolute_error(y_true=y_true, y_pred=y_pred)
+            rmse = root_mean_squared_error(y_true=y_true, y_pred=y_pred)
+            print(report)
 
-        print(classification_report(y_pred=y_pred, y_true=y_true))
+            print(f"RMSE: {rmse}")
+            print(f"MAE: {mae}\n")
+
+            binary_y_pred = [0 if p < 3 else 1 for p in y_pred]
+            binary_y_true = [0 if p < 3 else 1 for p in y_true]
+            binary_report = classification_report(y_pred=binary_y_pred, y_true=binary_y_true, labels=np.array([0, 1]), output_dict=True, zero_division=0)
+            print(binary_report)
+
+            maes.append(mae)
+            rmses.append(rmse)
+            classification_reports.append(report)
+            binary_classification_reports.append(binary_report)
+
+    print("\nMULTICLASS AVERAGE CLASSIFICATION REPORT: ")
+    print(_format_classification_report_summary(_average_classification_reports(classification_reports)))
+
+    maes = np.array(maes)
+    rmses = np.array(rmses)
+    print(f"MAE: {np.mean(maes)} ± {np.std(maes)}")
+    print(f"RMSE: {np.mean(rmses)} ± {np.std(rmses)}")
+
+    print("\nBINARY AVERAGE CLASSIFICATION REPORT: ")
+    print(_format_classification_report_summary(_average_classification_reports(binary_classification_reports)))
