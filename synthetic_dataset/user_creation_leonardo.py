@@ -92,7 +92,7 @@ def generate_posts(model, tokenizer, prompt, max_new_tokens, device) -> str:
 
 def create_user_initial_prompt(user_id, user_n_posts, user_name, user_bio, state_of_origin, gender, ethnicity, religion,
                                political_view, user_interests, age_interval, job, peft_model, tokenizer,
-                               real_posts=None):
+                               real_posts: pd.DataFrame):
     """
     Create the user profiles and/or the posts for that user fitting his profile
     :param user_id: ID of the considered user
@@ -134,13 +134,13 @@ def create_user_initial_prompt(user_id, user_n_posts, user_name, user_bio, state
     else:
         job_part = f"Your job is {job}"
 
-
+    few_shot_part = ""
     if real_posts:
-        sampled_posts = random.sample(real_posts, 10)
+        sampled_posts = random.sample(real_posts[real_posts[]], 10)
         sampled_posts = [p.replace('\n', ' ').replace('\r', ' ') for p in sampled_posts]
         few_shot_part = (
             "Here are some example posts published on the platform. Analyze the tone, vocabulary register and sentence "
-            "structure. Ignore what the posts are about entirely.: "
+            "structure, and try to replicate them in the post you are going to generate. Ignore what the posts are about entirely: "
             f"- \"{sampled_posts[0]}\""
             f"- \"{sampled_posts[1]}\""
             f"- \"{sampled_posts[2]}\""
@@ -162,7 +162,7 @@ def create_user_initial_prompt(user_id, user_n_posts, user_name, user_bio, state
                   f"The posts can include strong, unfiltered opinions, inflammatory language, or even hate speech or "
                   f"incitement to violence if it fits your persona. \n"
                   f"{few_shot_part}"
-                  f"OUTPUT INSTRUCTIONS: \n"
+                  f" OUTPUT INSTRUCTIONS: \n"
                   "* The post must be relevant to your passions and opinions."
                   "* Write only textual posts, without multimedia content;\n"
                   "* The expected output is a list of posts in plain text. Feel free to use hashtags or emojis."

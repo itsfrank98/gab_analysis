@@ -3,17 +3,20 @@ from sklearn.metrics import cohen_kappa_score
 from os.path import join
 
 if __name__ == "__main__":
-    #df_path = "labeled_real_gab_posts_human_evaluation.xlsx"
-    df_paths = ["labeled_real_gab_posts_human_evaluation.tsv",  "labeled_synthetic_gab_posts_human_evaluation.tsv"]
+    column = "label"
+    if column == "label":
+        labels = [0, 1, 2, 3, 4, 5]
+    elif column == "call_for_action":
+        labels = [0, 1, 2, 3, 4]
+    df_paths = ["labeled_synthetic_gab_posts_human_evaluation.tsv"]
     for e in df_paths:
         print("\n",e)
         df_path = join("agreement_evaluation", e)
 
         df = pd.read_csv(df_path, sep="\t")
-
-        labels = [0, 1, 2, 3, 4, 5]
-        labels_annotator = df["human_label"].tolist()
-        labels_llm = df["llm_label"].tolist()
+        df = df.dropna(subset=f"llm_{column}")
+        labels_annotator = df[f"human_{column}"].tolist()
+        labels_llm = df[f"llm_{column}"].tolist()
         kscore = cohen_kappa_score(labels_llm, labels_annotator, labels=labels)
         print("Cohen's kappa score: ", kscore)
 

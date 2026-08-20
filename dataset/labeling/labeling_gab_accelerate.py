@@ -230,7 +230,10 @@ if __name__ == "__main__":
         print(f"\nStarting computing file: {input_csv_file}")
         print(f"Number of processes: {accelerator.num_processes}\n")
 
-    df = pd.read_csv(input_csv_file, encoding='utf-8')
+    if input_csv_file.endswith(".tsv"):
+        df = pd.read_csv(input_csv_file, sep="\t", encoding="utf-8")
+    elif input_csv_file.endswith(".csv"):
+        df = pd.read_csv(input_csv_file, encoding='utf-8')
 
     # collect done posts from the original single-GPU file and all per-process files
     done_posts_ids = set()
