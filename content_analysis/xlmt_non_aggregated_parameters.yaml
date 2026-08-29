@@ -1,7 +1,7 @@
 MODEL_NAME: "cardiffnlp/twitter-xlm-roberta-base"
-DATA_PATH: "downstream_task/real_posts_capped_64.tsv"
+DATA_PATH: "downstream_task/synthetic_posts.tsv"  # "downstream_task/real_posts_capped_64.tsv"
 SYNTHETIC_POSTS_PATH: "downstream_task/synthetic_posts.tsv"
-OUTPUT_DIR: "xlmt_finetuned/post_classification/train_only_on_real_models"
+OUTPUT_DIR: "xlmt_finetuned/post_classification/train_on_{}"
 TEXT_COLUMN: "content"
 LABEL_COLUMN: "exact_level_found"
 PREDICTION_COLUMN: "predicted_by_xlmt"
@@ -9,7 +9,8 @@ NUM_LABELS: 6
 MAX_LENGTH: 64
 N_FOLDS: 10
 CROSS_VALIDATE: True
-ADD_SYNTHETIC: False
+TRAIN_ON: "real"
+
 # use if CROSS_VALIDATE:= False
 PREDICT_DATA_PATH: "../for_immense/labeled_synthetic_gab_posts_human_evaluation.tsv"
 PREDICT_OUTPUT_PATH: "../for_immense/synthetic_posts_predicted.tsv"

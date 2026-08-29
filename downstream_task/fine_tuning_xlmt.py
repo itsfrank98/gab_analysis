@@ -477,15 +477,12 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
         if os.path.exists(os.path.join(fold_output_dir, "train_ids.tsv")):
             print("\nIDS EXIST")
             train_ids = pd.read_csv(os.path.join(fold_output_dir, "train_ids.tsv"), sep="\t")
-            test_ids = pd.read_csv(os.path.join(fold_output_dir, "val_ids.tsv"), sep="\t")
+            test_ids = pd.read_csv(os.path.join(fold_output_dir, "test_ids.tsv"), sep="\t")
             train_ids = train_ids["account_id"].tolist()
             test_ids = test_ids["account_id"].tolist()
             train_df = bags_df[bags_df["account_id"].isin(train_ids)]
             val_df = bags_df[bags_df["account_id"].isin(test_ids)]
 
-            #print(train_df.head())
-            #print("\n\n")
-            #print(val_df.head())
         else:
             os.makedirs(fold_output_dir, exist_ok=True)
             train_df = bags_df.iloc[train_idx].reset_index(drop=True)
@@ -659,13 +656,13 @@ def main() -> None:
     synthetic_posts_df = pd.read_csv(SYNTHETIC_DATA_PATH, sep="\t")
     real_labels_df = pd.read_csv(REAL_LABELS_DF_NAME, sep="\t")
     synthetic_labels_df = pd.read_csv(SYNTHETIC_LABELS_DF_NAME, sep="\t")
-    if MODE == "r":
+    if MODE == "r":     # real
         data_df = real_posts_df
         labels_df = real_labels_df
-    elif MODE == "s":
+    elif MODE == "s":   # synthetic
         data_df = synthetic_posts_df
         labels_df = synthetic_labels_df
-    elif MODE == "rs":
+    elif MODE == "rs":  # real + synthetic
         data_df = pd.concat([real_posts_df, synthetic_posts_df])
         if "Unnamed: 0" in data_df.columns:
             data_df = data_df.drop(columns="Unnamed: 0")

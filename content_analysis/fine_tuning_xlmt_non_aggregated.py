@@ -134,7 +134,7 @@ def model_exists(path: str) -> bool:
 
 
 def load_trainer(model_path: str, tokenizer, data_collator, output_dir) -> Trainer:
-    logger.info("Loading fine-tuned model from %s", model_path)
+    logger.info("Loaded fine-tuned model from %s", model_path)
     model = AutoModelForSequenceClassification.from_pretrained(model_path, device_map="auto")
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -149,34 +149,45 @@ def load_trainer(model_path: str, tokenizer, data_collator, output_dir) -> Train
     )
 
 
-def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, add_synthetic, output_dir, text_column,
-                 label_column, max_length, model_name, num_labels, synthetic_posts_path=None, ) -> None:
+def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, train_on, output_dir, text_column,
+                 label_column, max_length, model_name, num_labels, synthetic_posts_path=None) -> None:
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
 
     fold_metrics = []
     fold_reports = []
     fold_binary_reports = []
+    maes = []
+    rmses = []
 
-    oof_preds = np.empty(len(df), dtype=int)
-    oof_labels = np.empty(len(df), dtype=int)
-    if add_synthetic:
+    if train_on == "real_and_synthetic":
         synthetic_posts = pd.read_csv(synthetic_posts_path, sep="\t")
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(df, y=df[label_column]), start=1):
         logger.info(f"CURRENT FOLD: {fold}")
-        os.makedirs(os.path.join(output_dir, "cross_validation", f"fold_{fold}"), exist_ok=True)
+        if train_on in ["real", "real_and_synthetic"]:
+            model_dir = os.path.join(output_dir, "models", f"fold_{fold}")
+        else:
+            model_dir = os.path.join(output_dir, "models", "model")
+        os.makedirs(model_dir, exist_ok=True)
         train_df_name = os.path.join(output_dir, "cross_validation", f"fold_{fold}", "train_df.tsv")
         val_df_name = os.path.join(output_dir, "cross_validation", f"fold_{fold}", "val_df.tsv")
-        if os.path.exists(train_df_name) and os.path.exists(val_df_name):
-            train_df = pd.read_csv(train_df_name, sep="\t")
-            if add_synthetic:
-                train_df = pd.concat([train_df, synthetic_posts])
-            val_df = pd.read_csv(val_df_name, sep="\t")
+        logger.info("TRAIN DF NAME {}".format(train_df_name))
+        logger.info("VAL DF NAME {}".format(train_df_name))
+        if train_on in ["real", "real_and_synthetic"]:
+            if os.path.exists(train_df_name) and os.path.exists(val_df_name):
+                train_df = pd.read_csv(train_df_name, sep="\t")
+                if train_on == "real_and_synthetic":
+                    train_df = pd.concat([train_df, synthetic_posts])
+                val_df = pd.read_csv(val_df_name, sep="\t")
+            else:
+                train_df = df.iloc[train_idx]
+                val_df = df.iloc[val_idx]
+                train_df.to_csv(train_df_name, sep="\t", index=False)
+                val_df.to_csv(val_df_name, sep="\t", index=False)
         else:
-            train_df = df.iloc[train_idx]
-            val_df = df.iloc[val_idx]
-            train_df.to_csv(train_df_name, sep="\t", index=False)
-            val_df.to_csv(val_df_name, sep="\t", index=False)
+            # If we train only on synthetic, we use the synthetic df for training and test the model on the same folds used for the real or real+synthetic case
+            train_df = df
+            val_df = pd.read_csv(val_df_name, sep="\t")
 
         train_dataset = to_dataset(train_df, tokenizer, text_column=text_column, label_column=label_column, max_length=max_length)
         val_dataset = to_dataset(val_df, tokenizer, text_column=text_column, label_column=label_column, max_length=max_length)
@@ -184,7 +195,7 @@ def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, add_synthe
         model = build_model(model_name, num_labels)
 
         training_args = TrainingArguments(
-            output_dir=f"{output_dir}/fold_{fold}",
+            output_dir=f"{model_dir}/fold_{fold}",
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
@@ -199,19 +210,23 @@ def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, add_synthe
             seed=SEED,
             report_to="none",
         )
-        fold_models_dir = os.path.join(output_dir, f"fold_{fold}")
+        # if train_on in ["real", "real_and_synthetic"]:
+        #     fold_models_dir = os.path.join(model_dir, f"fold_{fold}")
+        # else:
+        #     fold_models_dir = os.path.join(model_dir, "model")
         logger.info("\n\n")
-        logger.info(fold_models_dir)
+        logger.info(model_dir)
         prefix = "checkpoint-"
-        matches = [name for name in os.listdir(fold_models_dir) if name.startswith(prefix) and
-                   os.path.isdir(os.path.join(fold_models_dir, name))]
+        matches = [name for name in os.listdir(model_dir) if name.startswith(prefix) and
+                   os.path.isdir(os.path.join(model_dir, name))]
         logger.info(matches)
         if matches:
             ckp_value = max([int(m.split("-")[1]) for m in matches])
-            print(f"LOADING THE MODEL FROM CHECKPOINT {ckp_value}")
-            model_path = os.path.join(fold_models_dir, f"checkpoint-{ckp_value}")
-            trainer = load_trainer(output_dir=output_dir, tokenizer=tokenizer, data_collator=data_collator, model_path=model_path)
+            logger.info(f"LOADED THE MODEL FROM CHECKPOINT {ckp_value}")
+            model_path = os.path.join(model_dir, f"checkpoint-{ckp_value}")
+            trainer = load_trainer(output_dir=model_dir, tokenizer=tokenizer, data_collator=data_collator, model_path=model_path)
         else:
+            logger.info("TRAINING MODEL FROM SCRATCH")
             trainer = Trainer(
                 model=model,
                 args=training_args,
@@ -227,9 +242,6 @@ def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, add_synthe
         preds = np.argmax(predictions.predictions, axis=-1)
         labels = predictions.label_ids
 
-        oof_preds[val_idx] = preds
-        oof_labels[val_idx] = labels
-
         logger.info("Fold %d report: %s", fold, predictions.metrics)
         fold_metrics.append(predictions.metrics)
 
@@ -237,6 +249,8 @@ def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, add_synthe
                                        zero_division=0)
         logger.info("Fold %d classification report:\n%s", fold, report)
         fold_reports.append(report)
+        maes.append(mean_absolute_error(predictions.label_ids, preds))
+        rmses.append(root_mean_squared_error(predictions.label_ids, preds))
 
         binary_preds = np.array([0 if p < 3 else 1 for p in preds])
         binary_true_values = np.array([0 if p < 3 else 1 for p in labels])
@@ -253,8 +267,8 @@ def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, add_synthe
             f.write(f"\t{name} = {np.mean(values)} +/- {np.std(values)}\n")
         f.close()
 
-    print("Out-of-fold classification report")
-    print(classification_report(oof_labels, oof_preds, digits=4))
+    # print("Out-of-fold classification report")
+    # print(classification_report(oof_labels, oof_preds, digits=4))
 
     summary = _average_fold_metrics(fold_metrics)
     logger.info("Cross-validation summary over %d folds: %s", n_folds, summary)
@@ -274,7 +288,8 @@ def run_kfold_cv(df: pd.DataFrame, tokenizer, data_collator, n_folds, add_synthe
             n_folds,
             _format_classification_report_summary(binary_report_summary),
         )
-
+    logger.info(f"MAE: {np.array(maes).mean()} ± {np.array(maes).std()}")
+    logger.info(f"RMSE: {np.array(rmses).mean()} ± {np.array(rmses).std()}")
 
 def train(train_df: pd.DataFrame, tokenizer, data_collator, text_column, label_column, output_dir, model_name, num_labels) -> Trainer:
     train_dataset = to_dataset(train_df, tokenizer, text_column, label_column, num_labels)
@@ -328,7 +343,7 @@ def predict_and_annotate(trainer: Trainer, tokenizer, predict_path: str, output_
 
 
 def main(model_name, data_poth, cross_validate, output_dir, predict_data_path, predict_output_path, text_column,
-         label_column, max_length, n_folds, add_synthetic, synthetic_posts_path, num_labels, model_path) -> None:
+         label_column, max_length, n_folds, train_on, synthetic_posts_path, num_labels, model_path) -> None:
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
     train_df = load_data(data_poth, text_column=text_column, label_column=label_column)
@@ -336,12 +351,12 @@ def main(model_name, data_poth, cross_validate, output_dir, predict_data_path, p
     report_token_lengths(load_data(data_poth, text_column=text_column, label_column=label_column), tokenizer,
                          text_column=text_column, max_length=max_length)
     if cross_validate:
-        run_kfold_cv(train_df, tokenizer, data_collator, n_folds=n_folds, add_synthetic=add_synthetic, output_dir=output_dir,
+        run_kfold_cv(train_df, tokenizer, data_collator, n_folds=n_folds, train_on=train_on, output_dir=output_dir,
                      text_column=text_column, label_column=label_column, max_length=max_length, model_name=model_name,
                      num_labels=num_labels, synthetic_posts_path=synthetic_posts_path)
     else:
         if model_exists(output_dir):
-            print("LOADING THE MODEL")
+            print("LOADED THE MODEL")
             trainer = load_trainer(output_dir=output_dir, tokenizer=tokenizer, data_collator=data_collator, model_path=model_path)
         else:
             trainer = train(train_df, tokenizer, data_collator, text_column=text_column, label_column=label_column,
@@ -359,7 +374,6 @@ if __name__ == "__main__":
     model_name = config["MODEL_NAME"]
     data_path = config["DATA_PATH"]
     synthetic_posts_path = config["SYNTHETIC_POSTS_PATH"]
-    output_dir = config["OUTPUT_DIR"]
     text_column = config["TEXT_COLUMN"]
     label_column = config["LABEL_COLUMN"]
     prediction = config["PREDICTION_COLUMN"]
@@ -367,11 +381,12 @@ if __name__ == "__main__":
     max_length = config["MAX_LENGTH"]
     n_folds = config["N_FOLDS"]
     cross_validate = config["CROSS_VALIDATE"]
-    add_synthetic = config["ADD_SYNTHETIC"]
+    train_on = config["TRAIN_ON"]
+    output_dir = config["OUTPUT_DIR"].format(train_on)
     # use if CROSS_VALIDATE:= False
     prdatapath = config["PREDICT_DATA_PATH"]
     proutput_path = config["PREDICT_OUTPUT_PATH"]
     main(model_name=model_name, data_poth=data_path, synthetic_posts_path=synthetic_posts_path, output_dir=output_dir,
          text_column=text_column, label_column=label_column, max_length=max_length, num_labels=num_labels, model_path=model_name,
          cross_validate=cross_validate, predict_data_path=prdatapath, predict_output_path=proutput_path, n_folds=n_folds,
-         add_synthetic=add_synthetic)
+         train_on=train_on)
