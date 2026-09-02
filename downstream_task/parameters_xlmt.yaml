@@ -1,0 +1,30 @@
+paths:
+  home_dir: "/lustrehome/benedettifrancescophd/"
+  model_name: "models/roberta-xlmt"
+  real_data_path: "gab_analysis/downstream_task/real_posts_capped_64.tsv"
+  synthetic_data_path: "gab_analysis/downstream_task/synthetic_posts.tsv"
+  output_dir_parent: "gab_analysis/xlmt_finetuned/"
+  real_labels_df_name: "gab_analysis/downstream_task/real_users_capped.tsv"
+  synthetic_labels_df_name: "gab_analysis/downstream_task/synthetic_users_labels_bynetwork.tsv"
+
+  output_dir_name: "model_attention_pooling_network_labeling_rs/percented_train/"
+  predict_output_filename: "test_predictions.tsv"
+
+training:
+  mode: "rs"
+  num_labels: 6
+  max_length: 512
+  max_posts_per_user: 64
+  train_frac: 0.85
+  val_frac: 0.15
+  test_frac: 0
+  seed: 42
+  n_folds: 10
+  cross_val: True
+
+columns:
+  text_column: "content"
+  post_label_column: "exact_level_found"
+  account_label_column: "label"
+  prediction_column: "predicted_by_xlmt"
+

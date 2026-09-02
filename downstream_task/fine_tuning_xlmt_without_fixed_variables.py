@@ -25,38 +25,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PARAMETERS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parameters_xlmt.yaml")
-with open(PARAMETERS_PATH, "r") as _f:
-    _config = yaml.safe_load(_f)
-
-_paths = _config["paths"]
-_columns = _config["columns"]
-_training = _config["training"]
-
-HOME_DIR = _paths["home_dir"]
-
-MODEL_NAME = os.path.join(HOME_DIR, _paths["model_name"])
-REAL_DATA_PATH = os.path.join(HOME_DIR, _paths["real_data_path"])
-SYNTHETIC_DATA_PATH = os.path.join(HOME_DIR, _paths["synthetic_data_path"])
-OUTPUT_DIR = os.path.join(HOME_DIR, _paths["output_dir_parent"], _paths["output_dir_name"])
-REAL_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["real_labels_df_name"])
-SYNTHETIC_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["synthetic_labels_df_name"])
-PREDICT_OUTPUT_PATH = os.path.join(OUTPUT_DIR, _paths["predict_output_filename"])
-TEXT_COLUMN = _columns["text_column"]
-POST_LABEL_COLUMN = _columns["post_label_column"]
-ACCOUNT_LABEL_COLUMN = _columns["account_label_column"]
-PREDICTION_COLUMN = _columns["prediction_column"]
-NUM_LABELS = _training["num_labels"]
-MAX_LENGTH = _training["max_length"]
-MAX_POSTS_PER_USER = _training["max_posts_per_user"]
-TRAIN_FRAC, VAL_FRAC, TEST_FRAC = _training["train_frac"], _training["val_frac"], _training["test_frac"]
-SEED = _training["seed"]
-N_FOLDS = _training["n_folds"]
-MODE = _training["mode"]
-CROSS_VAL = _training["cross_val"]
-
-
-
 def is_main_process() -> bool:
     """True on the single process (single-GPU) or rank-0 process (torchrun DDP)."""
     return int(os.environ.get("RANK", "0")) == 0
@@ -99,7 +67,7 @@ def _cap_posts(group: pd.DataFrame, cap: int, rng: np.random.Generator) -> list:
     return group.loc[chosen_idx, TEXT_COLUMN].astype(str).tolist()
 
 
-def load_user_bags(df, labels_df, max_posts_per_user=MAX_POSTS_PER_USER, seed=SEED) -> pd.DataFrame:
+def load_user_bags(df, labels_df, max_posts_per_user, seed) -> pd.DataFrame:
     df = df.dropna(subset=["account_id", TEXT_COLUMN, POST_LABEL_COLUMN])
     labels_accounts = labels_df["account_id"].tolist()
     df = df[df["account_id"].isin(labels_accounts)]
@@ -128,7 +96,7 @@ def load_user_bags(df, labels_df, max_posts_per_user=MAX_POSTS_PER_USER, seed=SE
     return bags_df
 
 
-def split_bags(bags_df: pd.DataFrame, test_account_ids: list = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def split_bags(bags_df: pd.DataFrame, test_account_ids, train_frac, val_frac, test_frac, seed, account_label_column) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Splits bags into train/val/test.
 
     If test_account_ids is given, that exact set of accounts becomes the test split (so
@@ -141,55 +109,41 @@ def split_bags(bags_df: pd.DataFrame, test_account_ids: list = None) -> tuple[pd
         test_df = bags_df[test_mask]
         train_val_df = bags_df[~test_mask]
         try:
-            train_df, val_df = train_test_split(
-                train_val_df,
-                test_size=VAL_FRAC / (TRAIN_FRAC + VAL_FRAC),
-                stratify=train_val_df[ACCOUNT_LABEL_COLUMN],
-                random_state=SEED,
-            )
+            train_df, val_df = train_test_split(train_val_df, test_size=val_frac / (train_frac + val_frac),
+                stratify=train_val_df[account_label_column], random_state=seed)
         except ValueError:
             logger.warning("Stratified split failed (a class is too small) - falling back to unstratified split")
-            train_df, val_df = train_test_split(
-                train_val_df, test_size=VAL_FRAC / (TRAIN_FRAC + VAL_FRAC), random_state=SEED
-            )
+            train_df, val_df = train_test_split(train_val_df, test_size=val_frac / (train_frac + val_frac), random_state=seed)
     else:
         try:
             train_val_df, test_df = train_test_split(
-                bags_df, test_size=TEST_FRAC, stratify=bags_df[ACCOUNT_LABEL_COLUMN], random_state=SEED
+                bags_df, test_size=test_frac, stratify=bags_df[account_label_column], random_state=seed
             )
-            train_df, val_df = train_test_split(
-                train_val_df,
-                test_size=VAL_FRAC / (TRAIN_FRAC + VAL_FRAC),
-                stratify=train_val_df[ACCOUNT_LABEL_COLUMN],
-                random_state=SEED,
-            )
+            train_df, val_df = train_test_split(train_val_df, test_size=val_frac / (train_frac + val_frac),
+                stratify=train_val_df[account_label_column], random_state=seed)
         except ValueError:
             logger.warning("Stratified split failed (a class is too small) - falling back to unstratified split")
-            train_val_df, test_df = train_test_split(bags_df, test_size=TEST_FRAC, random_state=SEED)
+            train_val_df, test_df = train_test_split(bags_df, test_size=test_frac, random_state=seed)
             train_df, val_df = train_test_split(
-                train_val_df, test_size=VAL_FRAC / (TRAIN_FRAC + VAL_FRAC), random_state=SEED
+                train_val_df, test_size=val_frac / (train_frac + val_frac), random_state=seed
             )
 
     for name, split in [("train", train_df), ("val", val_df), ("test", test_df)]:
         logger.info("%s split: %d users", name, len(split))
 
-    return (
-        train_df.reset_index(drop=True),
-        val_df.reset_index(drop=True),
-        test_df.reset_index(drop=True),
-    )
+    return (train_df.reset_index(drop=True), val_df.reset_index(drop=True), test_df.reset_index(drop=True))
 
 
-def to_bag_dataset(bags_df: pd.DataFrame, tokenizer, include_labels: bool = True) -> Dataset:
+def to_bag_dataset(bags_df: pd.DataFrame, tokenizer, account_label_column, max_length, include_labels=True) -> Dataset:
     data = {"posts": bags_df["posts"].tolist()}
     if include_labels:
-        data["labels"] = bags_df[ACCOUNT_LABEL_COLUMN].tolist()
+        data["labels"] = bags_df[account_label_column].tolist()
     ds = Dataset.from_dict(data)
 
     def tokenize_batch(examples):
         all_ids, all_mask = [], []
         for posts in examples["posts"]:
-            encoded = tokenizer(posts, truncation=True, max_length=MAX_LENGTH)
+            encoded = tokenizer(posts, truncation=True, max_length=max_length)
             all_ids.append(encoded["input_ids"])
             all_mask.append(encoded["attention_mask"])
         return {"input_ids": all_ids, "attention_mask": all_mask}
@@ -238,8 +192,8 @@ class UserBagCollator:
 class UserAttentionPoolingClassifier(nn.Module):
     def __init__(
         self,
-        model_name: str = MODEL_NAME,
-        num_labels: int = NUM_LABELS,
+        model_name: str = "models/roberta-xlmt",
+        num_labels: int = 6,
         class_weights: torch.Tensor | None = None,
     ):
         super().__init__()
@@ -305,13 +259,8 @@ def model_exists(path: str) -> bool:
     return os.path.isfile(os.path.join(path, "model_state_dict.pt"))
 
 
-def load_trainer(
-    model_path: str,
-    data_collator: UserBagCollator,
-    training_args: TrainingArguments | None = None,
-    train_dataset: Dataset | None = None,
-    eval_dataset: Dataset | None = None,
-) -> Trainer:
+def load_trainer(model_path, output_dir, data_collator: UserBagCollator, training_args: TrainingArguments | None = None,
+                 train_dataset: Dataset | None = None, eval_dataset: Dataset | None = None) -> Trainer:
     logger.info("Loading fine-tuned model from %s", model_path)
     state_dict = torch.load(os.path.join(model_path, "model_state_dict.pt"), map_location="cpu")
 
@@ -320,24 +269,13 @@ def load_trainer(
 
     if training_args is None:
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        training_args = TrainingArguments(
-            output_dir=OUTPUT_DIR,
-            per_device_eval_batch_size=8,
-            report_to="none",
-            bf16=use_bf16,
-            fp16=torch.cuda.is_available() and not use_bf16,
-        )
-    return Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-    )
+        training_args = TrainingArguments(output_dir=output_dir, per_device_eval_batch_size=8, report_to="none",
+            bf16=use_bf16, fp16=torch.cuda.is_available() and not use_bf16)
+    return Trainer(model=model, args=training_args, train_dataset=train_dataset, eval_dataset=eval_dataset,
+        data_collator=data_collator, compute_metrics=compute_metrics)
 
 
-def _training_args(output_dir: str) -> TrainingArguments:
+def _training_args(output_dir: str, seed) -> TrainingArguments:
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     return TrainingArguments(
         output_dir=output_dir,
@@ -352,7 +290,7 @@ def _training_args(output_dir: str) -> TrainingArguments:
         weight_decay=0.01,
         warmup_ratio=0.1,
         logging_steps=50,
-        seed=SEED,
+        seed=seed,
         report_to="none",
         bf16=use_bf16,
         fp16=torch.cuda.is_available() and not use_bf16,
@@ -364,45 +302,40 @@ def _training_args(output_dir: str) -> TrainingArguments:
     )
 
 
-def train(train_dataset: Dataset, val_dataset: Dataset, data_collator: UserBagCollator, tokenizer) -> Trainer:
+def train(train_dataset: Dataset, val_dataset: Dataset, data_collator: UserBagCollator, tokenizer, output_dir, seed,
+          model_name, num_labels, max_posts_per_user, max_length) -> Trainer:
     model = build_model()
 
     train_dataset = train_dataset.add_column("length", [len(ids) for ids in train_dataset["input_ids"]])
 
-    training_args = _training_args(OUTPUT_DIR)
+    training_args = _training_args(output_dir, seed)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-    )
+    trainer = Trainer(model=model, args=training_args, train_dataset=train_dataset, eval_dataset=val_dataset,
+        data_collator=data_collator, compute_metrics=compute_metrics)
     trainer.train()
 
     # under multi-GPU DDP every rank runs this function identically - only rank 0 should
     # touch disk, otherwise ranks race to write the same files
     if trainer.is_world_process_zero():
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, "model_state_dict.pt"))
-        tokenizer.save_pretrained(OUTPUT_DIR)
-        with open(os.path.join(OUTPUT_DIR, "training_config.json"), "w") as f:
+        os.makedirs(output_dir, exist_ok=True)
+        torch.save(model.state_dict(), os.path.join(output_dir, "model_state_dict.pt"))
+        tokenizer.save_pretrained(output_dir)
+        with open(os.path.join(output_dir, "training_config.json"), "w") as f:
             json.dump(
                 {
-                    "model_name": MODEL_NAME,
-                    "num_labels": NUM_LABELS,
-                    "max_posts_per_user": MAX_POSTS_PER_USER,
-                    "max_length": MAX_LENGTH,
+                    "model_name": model_name,
+                    "num_labels": num_labels,
+                    "max_posts_per_user": max_posts_per_user,
+                    "max_length": max_length,
                 },
                 f,
             )
-        logger.info("Saved fine-tuned model to %s", OUTPUT_DIR)
+        logger.info("Saved fine-tuned model to %s", output_dir)
 
     return trainer
 
 
-def _balanced_class_weights(labels: np.ndarray, num_labels: int = NUM_LABELS) -> torch.Tensor:
+def _balanced_class_weights(labels: np.ndarray, num_labels) -> torch.Tensor:
     weights = compute_class_weight("balanced", classes=np.arange(num_labels), y=labels)
     return torch.tensor(weights, dtype=torch.float)
 
@@ -455,7 +388,38 @@ def _format_classification_report_summary(summary: dict) -> str:
     return "\n".join(lines)
 
 
-def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagCollator, n_folds: int = N_FOLDS) -> list:
+def extract_user_embeddings(
+    model: UserAttentionPoolingClassifier,
+    bags_df: pd.DataFrame,
+    tokenizer,
+    data_collator: UserBagCollator,
+    account_label_column: str,
+    max_length,
+    batch_size: int = 8,
+) -> tuple[list, torch.Tensor]:
+    """Runs the encoder + attention pooling (no classifier head) over a set of user bags.
+
+    Returns (account_ids, embeddings) with embeddings[i] corresponding to account_ids[i].
+    Uses a plain non-shuffling DataLoader over a single process, so - unlike Trainer.predict()
+    under distributed evaluation - row order is guaranteed to match bags_df's order exactly.
+    """
+    device = next(model.parameters()).device
+    model.eval()
+
+    dataset = to_bag_dataset(bags_df, tokenizer, include_labels=False, account_label_column=account_label_column, max_length=max_length)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=data_collator)
+
+    embeddings = []
+    with torch.no_grad():
+        for batch in loader:
+            batch = {k: v.to(device) for k, v in batch.items()}
+            embeddings.append(model.encode(batch["input_ids"], batch["attention_mask"], batch["post_mask"]).cpu())
+
+    return bags_df["account_id"].tolist(), torch.cat(embeddings, dim=0)
+
+
+def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagCollator, n_folds, output_dir,
+                   account_label_column, max_length, num_labels, seed) -> list:
     """Repeats the main() train/eval pipeline over n_folds stratified folds.
 
     Same model, tokenization and training args as train() for each fold. The only
@@ -463,8 +427,8 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
     class weights (derived from the fold's own train split) to account for label
     imbalance
     """
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
-    labels = bags_df[ACCOUNT_LABEL_COLUMN].to_numpy()
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    labels = bags_df[account_label_column].to_numpy()
 
     fold_metrics = []
     fold_reports = []
@@ -472,7 +436,7 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(bags_df, labels), start=1):
         logger.info("Cross-validation fold %d/%d", fold, n_folds)
-        fold_output_dir = os.path.join(OUTPUT_DIR, "cross_validation", f"fold_{fold}")
+        fold_output_dir = os.path.join(output_dir, "cross_validation", f"fold_{fold}")
         logger.info(f"FOLD OUTPUT DIR {fold_output_dir}")
         if os.path.exists(os.path.join(fold_output_dir, "train_ids.tsv")) and os.path.exists(os.path.join(fold_output_dir, "test_ids.tsv")):
             print("\nIDS EXIST")
@@ -485,7 +449,6 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
             logger.info(type(test_ids[0]))
             logger.info(type(train_ids[0]))
             logger.info(bags_df["account_id"].dtype)
-            logger.info(f"TRAIN DATASET SIZE: {len(train_df)}")
             logger.info(f"TEST IDS: {len(test_ids)}")
             logger.info(f"TEST df: {len(test_df)}")
         else:
@@ -495,18 +458,18 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
             train_df.to_csv(os.path.join(fold_output_dir, "train.tsv"), sep="\t", index=False)
             test_df.to_csv(os.path.join(fold_output_dir, "test.tsv"), sep="\t", index=False)
 
-        train_dataset = to_bag_dataset(train_df, tokenizer)
-        val_dataset = to_bag_dataset(test_df, tokenizer)
+        train_dataset = to_bag_dataset(train_df, tokenizer, account_label_column=account_label_column, max_length=max_length, include_labels=True)
+        val_dataset = to_bag_dataset(test_df, tokenizer, account_label_column=account_label_column, max_length=max_length, include_labels=True)
         train_dataset = train_dataset.add_column("length", [len(ids) for ids in train_dataset["input_ids"]])
 
-        class_weights = _balanced_class_weights(train_df[ACCOUNT_LABEL_COLUMN].to_numpy())
+        class_weights = _balanced_class_weights(train_df[ACCOUNT_LABEL_COLUMN].to_numpy(), num_labels=num_labels)
 
         if model_exists(fold_output_dir):
             logger.info("Fold %d model exists, loading it instead of training", fold)
             trainer = load_trainer(
-                fold_output_dir,
-                data_collator,
-                training_args=_training_args(fold_output_dir),
+                output_dir=fold_output_dir,
+                data_collator=data_collator,
+                training_args=_training_args(fold_output_dir, seed),
                 train_dataset=train_dataset,
                 eval_dataset=val_dataset,
             )
@@ -514,7 +477,7 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
             model = build_model(class_weights=class_weights)
             trainer = Trainer(
                 model=model,
-                args=_training_args(fold_output_dir),
+                args=_training_args(fold_output_dir, seed),
                 train_dataset=train_dataset,
                 eval_dataset=val_dataset,
                 data_collator=data_collator,
@@ -535,32 +498,26 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
         if trainer.is_world_process_zero():
             val_preds = np.argmax(predictions.predictions, axis=-1)
             report = classification_report(predictions.label_ids, val_preds, labels=np.arange(NUM_LABELS), output_dict=True, zero_division=0)
-            logger.info(
-                "Fold %d classification report:\n%s",
-                fold,
-                report,
-            )
+            logger.info(f"Fold {fold} classification report:\n {report}")
             fold_reports.append(report)
 
             binary_preds = np.array([0 if p < 3 else 1 for p in val_preds])
             binary_true_values = np.array([0 if p < 3 else 1 for p in predictions.label_ids])
             binary_report = classification_report(binary_true_values, binary_preds, labels=np.array([0, 1]), output_dict=True, zero_division=0)
 
-            logger.info(
-                "\n\nFold %d binary classification report:\n%s",
-                fold,
-                binary_report,
-            )
+            logger.info(f"\n\nFold {fold} binary classification report:\nP{binary_report}")
             fold_binary_reports.append(binary_report)
 
             train_embeddings_dst = os.path.join(fold_output_dir, "train_user_embeddings.pt")
             val_embeddings_dst = os.path.join(fold_output_dir, "test_user_embeddings.pt")
             model_dst = os.path.join(fold_output_dir, "model_state_dict.pt")
             if not os.path.exists(train_embeddings_dst):
-                train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
+                train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator,
+                                                      account_label_column=account_label_column, max_length=max_length)
                 save_user_embeddings(train_ids, train_embeddings, train_embeddings_dst)
             if not os.path.exists(val_embeddings_dst):
-                test_ids, test_embeddings = extract_user_embeddings(trainer.model, test_df, tokenizer, data_collator)
+                test_ids, test_embeddings = extract_user_embeddings(trainer.model, test_df, tokenizer, data_collator,
+                                                    account_label_column=account_label_column, max_length=max_length)
                 save_user_embeddings(test_ids, test_embeddings, val_embeddings_dst)
             if not os.path.exists(model_dst):
                 torch.save(trainer.model.state_dict(), model_dst)
@@ -571,49 +528,18 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
 
     if fold_reports:  # only rank 0 collects these (see is_world_process_zero() above)
         report_summary = _average_classification_reports(fold_reports)
-        logger.info(
-            "Cross-validation mean classification report over %d folds:\n%s",
-            n_folds,
-            _format_classification_report_summary(report_summary),
-        )
+        logger.info(f"Cross-validation mean classification report over {n_folds} folds:\n%s",
+                    _format_classification_report_summary(report_summary)
+                    )
 
     if fold_binary_reports:  # only rank 0 collects these (see is_world_process_zero() above)
         binary_report_summary = _average_classification_reports(fold_binary_reports)
         logger.info(
-            "Cross-validation mean classification report over %d folds:\n%s",
-            n_folds,
+            f"Cross-validation mean classification report over {n_folds} folds:\n%s",
             _format_classification_report_summary(binary_report_summary),
         )
 
     return fold_metrics
-
-
-def extract_user_embeddings(
-    model: UserAttentionPoolingClassifier,
-    bags_df: pd.DataFrame,
-    tokenizer,
-    data_collator: UserBagCollator,
-    batch_size: int = 8,
-) -> tuple[list, torch.Tensor]:
-    """Runs the encoder + attention pooling (no classifier head) over a set of user bags.
-
-    Returns (account_ids, embeddings) with embeddings[i] corresponding to account_ids[i].
-    Uses a plain non-shuffling DataLoader over a single process, so - unlike Trainer.predict()
-    under distributed evaluation - row order is guaranteed to match bags_df's order exactly.
-    """
-    device = next(model.parameters()).device
-    model.eval()
-
-    dataset = to_bag_dataset(bags_df, tokenizer, include_labels=False)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=data_collator)
-
-    embeddings = []
-    with torch.no_grad():
-        for batch in loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
-            embeddings.append(model.encode(batch["input_ids"], batch["attention_mask"], batch["post_mask"]).cpu())
-
-    return bags_df["account_id"].tolist(), torch.cat(embeddings, dim=0)
 
 
 def save_user_embeddings(account_ids: list, embeddings: torch.Tensor, path: str) -> None:
@@ -621,7 +547,8 @@ def save_user_embeddings(account_ids: list, embeddings: torch.Tensor, path: str)
     logger.info("Saved %d user embeddings (dim %d) to %s", len(account_ids), embeddings.shape[1], path)
 
 
-def evaluate_on_test(trainer: Trainer, test_dataset: Dataset, test_df: pd.DataFrame) -> None:
+def evaluate_on_test(trainer: Trainer, test_dataset: Dataset, test_df: pd.DataFrame, predict_output_path,
+                     account_label_column) -> None:
     # trainer.predict is a collective call under DDP (every rank feeds its shard and the
     # results get gathered) - it must run unconditionally on all ranks; only the reporting
     # and file-writing below is restricted to rank 0
@@ -632,7 +559,7 @@ def evaluate_on_test(trainer: Trainer, test_dataset: Dataset, test_df: pd.DataFr
     preds = np.argmax(predictions.predictions, axis=-1)
     logger.info("Test set metrics: %s", predictions.metrics)
 
-    true_labels = test_df[ACCOUNT_LABEL_COLUMN].to_numpy()
+    true_labels = test_df[account_label_column].to_numpy()
     binary_true_labels = np.array([1 if e > 2 else 0 for e in true_labels])
     binary_preds = np.array([1 if e > 2 else 0 for e in preds])
     p, r, f, _ = precision_recall_fscore_support(true_labels, preds, average="macro", zero_division=0)
@@ -647,20 +574,21 @@ def evaluate_on_test(trainer: Trainer, test_dataset: Dataset, test_df: pd.DataFr
 
     out_df = test_df.copy()
     out_df[PREDICTION_COLUMN] = preds
-    os.makedirs(os.path.dirname(PREDICT_OUTPUT_PATH), exist_ok=True)
-    out_df.to_csv(PREDICT_OUTPUT_PATH, sep="\t", index=False)
-    logger.info("Wrote %d test predictions to %s", len(out_df), PREDICT_OUTPUT_PATH)
+    os.makedirs(os.path.dirname(predict_output_path), exist_ok=True)
+    out_df.to_csv(predict_output_path, sep="\t", index=False)
+    logger.info("Wrote %d test predictions to %s", len(out_df), predict_output_path)
 
 
-def main() -> None:
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+def main(model_name, real_data_path, synthetic_data_path, real_labels_df_name, synthetic_labels_df_name,
+         max_posts_per_user, seed, text_column, account_label_column, output_dir, train_frac, val_frac, test_frac,
+         max_length, num_labels, n_folds) -> None:
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     data_collator = UserBagCollator(tokenizer)
 
-
-    real_posts_df = pd.read_csv(REAL_DATA_PATH, sep="\t")
-    synthetic_posts_df = pd.read_csv(SYNTHETIC_DATA_PATH, sep="\t")
-    real_labels_df = pd.read_csv(REAL_LABELS_DF_NAME, sep="\t")
-    synthetic_labels_df = pd.read_csv(SYNTHETIC_LABELS_DF_NAME, sep="\t")
+    real_posts_df = pd.read_csv(real_data_path, sep="\t")
+    synthetic_posts_df = pd.read_csv(synthetic_data_path, sep="\t")
+    real_labels_df = pd.read_csv(real_labels_df_name, sep="\t")
+    synthetic_labels_df = pd.read_csv(synthetic_labels_df_name, sep="\t")
     if MODE == "r":     # real
         data_df = real_posts_df
         labels_df = real_labels_df
@@ -676,45 +604,86 @@ def main() -> None:
         labels_df = pd.concat([real_labels_df, synthetic_labels_df])
 
     if is_main_process():
-        report_token_lengths(data_df.dropna(subset=[TEXT_COLUMN]), tokenizer)
+        report_token_lengths(data_df.dropna(subset=[text_column]), tokenizer)
 
-    bags_df = load_user_bags(data_df, labels_df=labels_df)
+    bags_df = load_user_bags(data_df, labels_df=labels_df, max_posts_per_user=max_posts_per_user, seed=seed)
 
     if not CROSS_VAL:
-        test_ids_path = os.path.join(OUTPUT_DIR, "val_ids.tsv")
+        test_ids_path = os.path.join(output_dir, "val_ids.tsv")
         if os.path.exists(test_ids_path):
             logger.info("\nTEST IDS EXIST")
             test_account_ids = pd.read_csv(test_ids_path, sep="\t")["account_id"].tolist()
-            train_df, val_df, test_df = split_bags(bags_df, test_account_ids=test_account_ids)
+            train_df, val_df, test_df = split_bags(bags_df, test_account_ids=test_account_ids, train_frac=train_frac,
+                                                   val_frac=val_frac, test_frac=test_frac, seed=seed,
+                                                   account_label_column=account_label_column)
             logger.info(f"\nLENGTH OF LOADED TEST DATASET: {len(test_df)}")
         else:
-            train_df, val_df, test_df = split_bags(bags_df)
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            train_df, val_df, test_df = split_bags(bags_df, train_frac=train_frac, test_account_ids=None,
+                                                   val_frac=val_frac, test_frac=test_frac, seed=seed,
+                                                   account_label_column=account_label_column)
+            os.makedirs(output_dir, exist_ok=True)
             test_df[["account_id"]].to_csv(test_ids_path, sep="\t", index=False)
             logger.info(f"\nLENGTH OF CREATED TEST DATASET: {len(test_df)}")
-        test_dataset = to_bag_dataset(test_df, tokenizer)
+        test_dataset = to_bag_dataset(test_df, tokenizer, account_label_column=account_label_column, max_length=max_length)
 
-        if model_exists(OUTPUT_DIR):
+        if model_exists(output_dir):
             logger.info("Model exists, I am loading it")
-            trainer = load_trainer(OUTPUT_DIR, data_collator)
+            trainer = load_trainer(data_collator=data_collator, output_dir=output_dir)
         else:
             logger.info("Model doesn't exist, I am training it")
-            train_dataset = to_bag_dataset(train_df, tokenizer)
-            val_dataset = to_bag_dataset(val_df, tokenizer)
-            trainer = train(train_dataset, val_dataset, data_collator, tokenizer)
+            train_dataset = to_bag_dataset(train_df, tokenizer, account_label_column=account_label_column, max_length=max_length)
+            val_dataset = to_bag_dataset(val_df, tokenizer, account_label_column=account_label_column, max_length=max_length)
+            trainer = train(train_dataset, val_dataset, data_collator, tokenizer, output_dir=output_dir, seed=seed,
+                            model_name=model_name, num_labels=num_labels, max_posts_per_user=max_posts_per_user, max_length=max_length)
 
-        evaluate_on_test(trainer, test_dataset, test_df)
+        evaluate_on_test(trainer, test_dataset, test_df, predict_output_path="", account_label_column=account_label_column)
 
         if trainer.is_world_process_zero():
-            train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator)
-            save_user_embeddings(train_ids, train_embeddings, os.path.join(OUTPUT_DIR, "train_user_embeddings.pt"))
+            train_ids, train_embeddings = extract_user_embeddings(trainer.model, train_df, tokenizer, data_collator,
+                                                                  account_label_column=account_label_column, max_length=max_length)
+            save_user_embeddings(train_ids, train_embeddings, os.path.join(output_dir, "train_user_embeddings.pt"))
 
-            test_ids, test_embeddings = extract_user_embeddings(trainer.model, test_df, tokenizer, data_collator)
-            save_user_embeddings(test_ids, test_embeddings, os.path.join(OUTPUT_DIR, "test_user_embeddings.pt"))
+            test_ids, test_embeddings = extract_user_embeddings(trainer.model, test_df, tokenizer, data_collator,
+                                                                  account_label_column=account_label_column, max_length=max_length)
+            save_user_embeddings(test_ids, test_embeddings, os.path.join(output_dir, "test_user_embeddings.pt"))
     else:
         logger.info("CROSS VALIDATING...")
-        cross_validate(bags_df, tokenizer, data_collator)
+        for perc in ["30_perc", "40_perc", "50_perc", "60_perc"]:
+            cross_validate(bags_df, tokenizer, data_collator, account_label_column=account_label_column, max_length=max_length,
+                           num_labels=num_labels, seed=seed, n_folds=n_folds, output_dir=output_dir)
 
 
 if __name__ == "__main__":
-    main()
+    PARAMETERS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parameters_xlmt.yaml")
+    with open(PARAMETERS_PATH, "r") as _f:
+        _config = yaml.safe_load(_f)
+
+    _paths = _config["paths"]
+    _columns = _config["columns"]
+    _training = _config["training"]
+
+    HOME_DIR = _paths["home_dir"]
+
+    MODEL_NAME = os.path.join(HOME_DIR, _paths["model_name"])
+    REAL_DATA_PATH = os.path.join(HOME_DIR, _paths["real_data_path"])
+    SYNTHETIC_DATA_PATH = os.path.join(HOME_DIR, _paths["synthetic_data_path"])
+    OUTPUT_DIR = os.path.join(HOME_DIR, _paths["output_dir_parent"], _paths["output_dir_name"])
+    REAL_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["real_labels_df_name"])
+    SYNTHETIC_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["synthetic_labels_df_name"])
+    # PREDICT_OUTPUT_PATH = os.path.join(OUTPUT_DIR, _paths["predict_output_filename"])
+    TEXT_COLUMN = _columns["text_column"]
+    POST_LABEL_COLUMN = _columns["post_label_column"]
+    ACCOUNT_LABEL_COLUMN = _columns["account_label_column"]
+    PREDICTION_COLUMN = _columns["prediction_column"]
+    NUM_LABELS = _training["num_labels"]
+    MAX_LENGTH = _training["max_length"]
+    MAX_POSTS_PER_USER = _training["max_posts_per_user"]
+    TRAIN_FRAC, VAL_FRAC, TEST_FRAC = _training["train_frac"], _training["val_frac"], _training["test_frac"]
+    SEED = _training["seed"]
+    N_FOLDS = _training["n_folds"]
+    MODE = _training["mode"]
+    CROSS_VAL = _training["cross_val"]
+    main(model_name=MODEL_NAME, real_data_path=REAL_DATA_PATH, synthetic_data_path=SYNTHETIC_DATA_PATH, real_labels_df_name=REAL_LABELS_DF_NAME,
+         synthetic_labels_df_name=SYNTHETIC_LABELS_DF_NAME, max_posts_per_user=MAX_POSTS_PER_USER, seed=SEED,
+         text_column=TEXT_COLUMN, account_label_column=ACCOUNT_LABEL_COLUMN, output_dir=OUTPUT_DIR, train_frac=TRAIN_FRAC,
+         val_frac=VAL_FRAC, test_frac=TEST_FRAC, max_length=MAX_LENGTH, num_labels=NUM_LABELS,)
