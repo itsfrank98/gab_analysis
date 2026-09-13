@@ -1,0 +1,35 @@
+[project]
+name = "gab-analysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.12.3"
+dependencies = [
+    "bitsandbytes>=0.49.2",
+    "ctransformers[cuda]>=0.2.27",
+    "datasets",
+    "numpy==2.4.2",
+    "openai==2.24.0",
+    "pandas==3.0.1",
+    "peft==0.18.1",
+    "protobuf>=7.34.1",
+    "requests==2.32.5",
+    "scikit-learn",
+    "sentencepiece>=0.2.1",
+    "tiktoken>=0.12.0",
+    "torch==2.6.0",
+    "torch-geometric",
+    "tqdm>=4.67.3",
+    "transformers==4.49",
+]
+[[tool.uv.index]] 
+name = "pytorch-cu124" 
+url = "https://download.pytorch.org/whl/cu124" 
+explicit = true 
+[tool.uv.sources] 
+torch = [ { index = "pytorch-cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'" } ]
+# Configuration for uv
+[tool.uv]
+index-strategy = "unsafe-best-match" # Crucial for resolving complex dependency conflicts
+[tool.uv.extra-build-dependencies]
+torch-sparse = ["torch"]
