@@ -12,12 +12,7 @@ from sklearn.metrics import accuracy_score, classification_report, precision_rec
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
-from transformers import (
-    AutoModel,
-    AutoTokenizer,
-    Trainer,
-    TrainingArguments,
-)
+from transformers import AutoModel, AutoTokenizer, Trainer, TrainingArguments
 
 logging.basicConfig(
     level=logging.INFO,
@@ -478,12 +473,18 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
             print("\nIDS EXIST")
             train_ids = pd.read_csv(os.path.join(fold_output_dir, "train_ids.tsv"), sep="\t")
             test_ids = pd.read_csv(os.path.join(fold_output_dir, "test_ids.tsv"), sep="\t")
+            # train_df = pd.read_csv(os.path.join(fold_output_dir, "train.tsv"), sep="\t")
+            # zero = train_df[train_df["label"] == 0]["account_id"].tolist()
+            # one = train_df[train_df["label"] == 1]["account_id"].tolist()
+            # two = train_df[train_df["label"] == 2]["account_id"].tolist()
+            # three = train_df[train_df["label"] == 3]["account_id"].tolist()
+            # four = train_df[train_df["label"] == 4]["account_id"].tolist()
+            # five = train_df[train_df["label"] == 5]["account_id"].tolist()
+            # train_ids = zero[:4] + one[:16] + two[:21] + three[:27] + four[:18] + five[:12]
             train_ids = train_ids["account_id"].tolist()
             test_ids = test_ids["account_id"].tolist()
             train_df = bags_df[bags_df["account_id"].isin(train_ids)]
             test_df = bags_df[bags_df["account_id"].isin(test_ids)]
-            logger.info(type(test_ids[0]))
-            logger.info(type(train_ids[0]))
             logger.info(bags_df["account_id"].dtype)
             logger.info(f"TRAIN DATASET SIZE: {len(train_df)}")
             logger.info(f"TEST IDS: {len(test_ids)}")
@@ -663,6 +664,7 @@ def main() -> None:
     synthetic_labels_df = pd.read_csv(SYNTHETIC_LABELS_DF_NAME, sep="\t")
     if MODE == "r":     # real
         data_df = real_posts_df
+        logger.info(f"Real posts dataset size: {len(real_posts_df)}")
         labels_df = real_labels_df
     elif MODE == "s":   # synthetic
         data_df = synthetic_posts_df

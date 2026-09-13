@@ -99,7 +99,7 @@ def get_model(model_dir, ne_dim, df, we_dim, batch_size, lr, edge_path, epochs, 
 
 
 def get_predictions(model, ids_to_predict, full_features_dict, full_network_path, field_name_id, df, sizes,
-                    batch_size=128, device="cuda"):
+                    batch_size=128, device="cuda"):  # i PASS full_network_path AND ids_to_predict SO THE WHOLE NETWORK IS CREATED BUT THE PREDICTION IS ONLY FOR THE TEST NODES
     mapper, inv_map = create_mappers(full_features_dict)
     graph, node_ids = create_graph(inv_map=inv_map, features=full_features_dict, edg_dir=full_network_path,
                                    df=df, field_name_id=field_name_id, inference=True)
@@ -108,10 +108,7 @@ def get_predictions(model, ids_to_predict, full_features_dict, full_network_path
     # Only seed the loader with the test nodes: NeighborLoader samples the k-hop neighborhood
     # needed to compute their embeddings (which can include train nodes), without wasting
     # compute on every other train node in the full network.
-    test_idx = torch.tensor(
-        [i for i, nid in enumerate(node_ids) if nid in ids_to_predict],
-        dtype=torch.long,
-    )
+    test_idx = torch.tensor([i for i, nid in enumerate(node_ids) if nid in ids_to_predict], dtype=torch.long)
     loader = NeighborLoader(graph, num_neighbors=sizes, input_nodes=test_idx, batch_size=batch_size)
 
     model.eval()
@@ -156,12 +153,12 @@ if __name__ == "__main__":
     maes, rmses = [], []
     if perform_cv:
         print(f"MODE: {mode}, DF PATH: {df_path}")
-        for d in range(n_folds):
-            print(f"FOLD: {d+1}")
-            train_features_src = os.path.join(cv_source, f"fold_{d+1}", "train_user_embeddings.pt")
-            test_features_src = os.path.join(cv_source, f"fold_{d+1}", "test_user_embeddings.pt")
-            train_network_path = os.path.join(cv_source, f"fold_{d+1}", "train_network.edg")
-            dir_models_fold = os.path.join(dir_models, f"fold_{d+1}")
+        for d in range(1, n_folds+1):
+            print(f"FOLD: {d}")
+            train_features_src = os.path.join(cv_source, f"fold_{d}", "train_user_embeddings.pt")
+            test_features_src = os.path.join(cv_source, f"fold_{d}", "test_user_embeddings.pt")
+            train_network_path = os.path.join(cv_source, f"fold_{d}", "train_network.edg")
+            dir_models_fold = os.path.join(dir_models, f"fold_{d}")
             train_features = torch.load(train_features_src)
 
             full_df = pd.read_csv(df_path, sep="\t")

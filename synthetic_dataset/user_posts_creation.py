@@ -6,6 +6,7 @@ import numpy as np
 import os
 import pandas as pd
 import re
+import time
 import torch
 from accelerate import Accelerator
 from creation_options import posts_levels
@@ -127,6 +128,7 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
             "talk about committing terrorist acts", "declare war to the unfaithful", "wish for the systematic destruction of entire community"]
     }
 
+    now = time.time()
     for i in range(n_posts):
         #print("\n\nITERATION {}".format(i), flush=True)
         ok = False
@@ -143,8 +145,8 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
                     lab = labels[post_level]
                     dist = distances[post_level]
                     clustered_posts_id = ids[post_level]
-                    ids_post = sample(distances_to_centroid=dist, labels=lab, post_ids=clustered_posts_id,
-                                      peripheral_ratio=0.6, random_state=None)
+                    ids_post = sample(distances_to_centroid=dist, labels=lab, post_ids=clustered_posts_id, peripheral_ratio=0.6,
+                                 random_state=None)
                     sampled_posts = real_posts[real_posts["id"].isin(ids_post)]["content"].tolist()
             else:
                 posts = real_posts[real_posts["exact_level_found"] == post_level]["content"].tolist()
@@ -191,6 +193,7 @@ def create_user_moody_prompt(user_id, user_name, user_bio, state_of_origin, gend
             except (json.decoder.JSONDecodeError, KeyError) as err:
                 print(err)
                 counter_not_ok += 1
+    print(f"TIME SPENT: {(time.time()-now)} seconds")
     return ld
 
 
@@ -207,6 +210,7 @@ def main(output_fname, n_posts, model_path, accelerator, users_profiles_path=Non
     posts = pd.DataFrame(columns=["account_id"])
     if already_created_posts:
         posts = pd.read_csv(already_created_posts)
+        print(len(posts))
         present_users = list(posts.drop_duplicates(subset="account_id")["account_id"])
         print("PRESENT USERS: ", len(present_users))
     model, tokenizer = load_model_and_tokenizer(model_path=model_path, load_in_4bit=True, accelerator=accelerator)
@@ -239,7 +243,7 @@ def main(output_fname, n_posts, model_path, accelerator, users_profiles_path=Non
             for i, row in enumerate(shard):
                 print(f"[proc {accelerator.process_index}] {i}/{len(shard)}")
                 posts_from_user = len(posts[posts["account_id"]==row["account_id"]])
-                if posts_from_user < n_posts-2:
+                if posts_from_user < n_posts:
                     present_users.append(row["account_id"])
                     #print(row["account_id"], flush=True)
                     d = create_user_moody_prompt(user_id=row["account_id"], user_name=row["username"], user_bio=row["user_bio"],

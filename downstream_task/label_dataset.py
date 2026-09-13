@@ -158,12 +158,6 @@ def label_by_network(edges, posts_df):
 
 
 
-def pagerank_based(d_labels):
-    di = {}
-    alpha = 0.7
-    for node in d_labels:
-        di[node] = alpha * d_labels[node]["zero_level"] + (1 - alpha) * mean(d_labels[node]["first_level"])
-
 if __name__ == "__main__":
     real_posts = "real_posts_capped_64.tsv"
     synthetic_posts = "synthetic_posts.tsv"
