@@ -11,12 +11,23 @@ guidelines = """
 Assign the "exact_level_found" based on these definitions:
  
 ## exact_level_found
-* **0 - Negative (No Radicalization):** This would include content that has no signs of promoting, endorsing, or expressing extremist ideologies or actions. Posts under this category are neutral or express tolerance, diversity, peace, etc. This level leads to "No Call For Action".
-* **1 - Expression of Radical Views:** Content that expresses views aligned with extremist ideologies but does not actively advocate for violence or involvement. It might be sharing a radical viewpoint, belief, or stereotype or indicating approval of radical actions/actors without actively supporting or calling for such actions. This level of radicalization leads to the "Low Call For Action".
-* **2 - Using Radical Propaganda:** The content uses, or shares established extremist propaganda. This could include sharing extremist images, slogans, videos, speeches, conspiracy theories, misinformation, or disinformation designed to promote a radical ideology or group. This level of radicalization leads as well to the "Low Call For Action".
-* **3 - Associated with Radical Groups:** Content that signifies association or affiliation with known radical or extremist groups. This could be through sharing group propaganda, expressing support or admiration for the group, claiming membership, or referencing involvement in group activities. This level of radicalization leads to the "High Call For Action".
-* **4 - Dehumanizing the Other:** Content that strips away the humanity of those not belonging to the extremist ideology. This could involve hate speech, derogatory language, or broad negative stereotyping. Such content often degrades, devalues, or dehumanizes individuals based on their race, religion, nationality, or any identifying characteristic.
-* **5 - Call for Action against others:** This represents the most extreme level, where content explicitly calls for violent action against individuals, groups, or entities seen as enemies of the radical ideology. It includes promoting or endorsing violence, terrorism, or harm against others. This level of radicalization leads to the "Very High Call For Action".
+* **0 - Negative (No Radicalization):** This would include content that has no signs of promoting, endorsing, or expressing extremist ideologies or actions. Posts under 
+        this category are neutral or express tolerance, diversity, peace, etc. This level leads to "No Call For Action".
+* **1 - Expression of Radical Views:** Content that expresses views aligned with extremist ideologies but does not actively advocate for violence or involvement. It might 
+        be sharing a radical viewpoint, belief, or stereotype or indicating approval of radical actions/actors without actively supporting or calling for such actions. This 
+        level of radicalization leads to the "Low Call For Action".
+* **2 - Using Radical Propaganda:** The content uses, or shares established extremist propaganda. This could include sharing extremist images, slogans, videos, speeches, 
+        conspiracy theories, misinformation, or disinformation designed to promote a radical ideology or group. This level of radicalization leads as well to the 
+        "Low Call For Action".
+* **3 - Associated with Radical Groups:** Content that signifies association or affiliation with known radical or extremist groups. This could be through sharing group 
+        propaganda, expressing support or admiration for the group, claiming membership, or referencing involvement in group activities. This level of radicalization leads 
+        to the "High Call For Action".
+* **4 - Dehumanizing the Other:** Content that strips away the humanity of those not belonging to the extremist ideology. This could involve hate speech, derogatory 
+        language, or broad negative stereotyping. Such content often degrades, devalues, or dehumanizes individuals based on their race, religion, nationality, or any 
+        identifying characteristic.
+* **5 - Call for Action against others:** This represents the most extreme level, where content explicitly calls for violent action against individuals, groups, or entities
+        seen as enemies of the radical ideology. It includes promoting or endorsing violence, terrorism, or harm against others. This level of radicalization leads to the 
+        "Very High Call For Action".
  
 *Please note that in some cases (very few) the level of "Call for Action" isn’t in line with the above, due to the specific content of the posts and or familiarity with the specific person behind the account.*
  
