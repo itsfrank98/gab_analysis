@@ -40,7 +40,7 @@ if __name__ == "__main__":
     parser.add_argument("--df_src", type=str, default=None, required=False)  # "all_posts_2800_3000.csv"
     parser.add_argument("--content_field_name", type=str, default="posts", required=False)
     parser.add_argument("--features_dst", type=str, help="path where the features dictionary is saved", required=False)     # , default=ft_dst
-    parser.add_argument("--user_id_field_name", type=str, default="account_id", required=False)
+    parser.add_argument("--user_id_field_name", type=str, default="account_id", required=False)  # used when aggregating
     parser.add_argument("--post_id_field_name", type=str, default="id", required=False)
     parser.add_argument("--non_aggregated_embs_src", type=str, help="path where the non-aggregated embeddings are saved", required=False, default=None)     #"../dataset/features/sonar_features/sonar_features.pkl"
     parser.add_argument("--aggregated_features_dst", type=str, help="path where the aggregated features are saved", required=False, default="../dataset/features/sonar_features_aggregated.pkl")

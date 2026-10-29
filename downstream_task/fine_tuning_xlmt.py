@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+from argparse import ArgumentParser
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import numpy as np
 import pandas as pd
@@ -20,7 +22,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PARAMETERS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parameters_xlmt.yaml")
+parser = ArgumentParser()
+parser.add_argument("--config_fname", type=str, required=True)
+args = parser.parse_args()
+
+PARAMETERS_PATH = args.config_fname
+print(f"PARAMETERS: {PARAMETERS_PATH}")
 with open(PARAMETERS_PATH, "r") as _f:
     _config = yaml.safe_load(_f)
 
@@ -28,15 +35,14 @@ _paths = _config["paths"]
 _columns = _config["columns"]
 _training = _config["training"]
 
-HOME_DIR = _paths["home_dir"]
+MODEL_NAME = _paths["model_name"]
+REAL_DATA_PATH = _paths["real_data_path"]
+SYNTHETIC_DATA_PATH = _paths["synthetic_data_path"]
+OUTPUT_DIR = _paths["output_dir_name"]
+REAL_LABELS_DF_NAME = _paths["real_labels_df_name"]
+SYNTHETIC_LABELS_DF_NAME = _paths["synthetic_labels_df_name"]
+PREDICT_OUTPUT_PATH = _paths["predict_output_filename"]
 
-MODEL_NAME = os.path.join(HOME_DIR, _paths["model_name"])
-REAL_DATA_PATH = os.path.join(HOME_DIR, _paths["real_data_path"])
-SYNTHETIC_DATA_PATH = os.path.join(HOME_DIR, _paths["synthetic_data_path"])
-OUTPUT_DIR = os.path.join(HOME_DIR, _paths["output_dir_parent"], _paths["output_dir_name"])
-REAL_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["real_labels_df_name"])
-SYNTHETIC_LABELS_DF_NAME = os.path.join(HOME_DIR, _paths["synthetic_labels_df_name"])
-PREDICT_OUTPUT_PATH = os.path.join(OUTPUT_DIR, _paths["predict_output_filename"])
 TEXT_COLUMN = _columns["text_column"]
 POST_LABEL_COLUMN = _columns["post_label_column"]
 ACCOUNT_LABEL_COLUMN = _columns["account_label_column"]
@@ -49,7 +55,6 @@ SEED = _training["seed"]
 N_FOLDS = _training["n_folds"]
 MODE = _training["mode"]
 CROSS_VAL = _training["cross_val"]
-
 
 
 def is_main_process() -> bool:

@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 import os
+import torch
+import pandas as pd
+from tqdm import tqdm
 
 
 def save_to_pickle(name, c):
@@ -155,18 +158,35 @@ def _average_classification_reports(fold_reports: list) -> dict:
 
 def _format_classification_report_summary(summary: dict) -> str:
     rows = [k for k in summary if k != "accuracy"]
-    lines = [f"{'':>15}{'precision':>16}{'recall':>16}{'f1-score':>16}{'support':>16}"]
+    lines = [f"{'':>15}{'precision':>16}{'recall':>16}{'f1-score':>16}"]
     for row in rows:
         cells = "".join(
-            f"{summary[row][metric]['mean']:>9.3f} ± {summary[row][metric]['std']:<5.3f}"
-            for metric in ("precision", "recall", "f1-score", "support")
+            f"{summary[row][metric]['mean']:>9.2f} ± {summary[row][metric]['std']:<5.2f}"
+            for metric in ("precision", "recall", "f1-score")
         )
         lines.append(f"{row:>15}{cells}")
     if "accuracy" in summary:
         acc = summary["accuracy"]
-        lines.append(f"\n{'accuracy':>15}{acc['mean']:>9.3f} ± {acc['std']:<5.3f}")
+        lines.append(f"\n{'accuracy':>15}{acc['mean']:>9.2f} ± {acc['std']:<5.2f}")
     return "\n".join(lines)
 
+def clean_torch_embeddings():
+    # Use this code when the torch embeddind dictionary created for a fold contains more data than what is supposed to be
+    # for example, train_ids contains 100 users and the embedding dictionary contains 25000 embeddings
+    src = "downstream_task/percented_train_r/20_perc/cross_validation/"
+    for fold in tqdm(os.listdir(src)):
+        feats = torch.load(os.path.join(src, fold, "test_user_embeddings.pt"))
+        ids = pd.read_csv(os.path.join(src, fold, "test_ids.tsv"), sep="\t")["account_id"].tolist()
+        new_feats = {}
+        new_ids = []
+        new_embs = []
+        for k, v in zip(feats["account_id"], feats["embeddings"]):
+            if k in ids:
+                new_ids.append(k)
+                new_embs.append(v)
+        new_feats["account_id"] = new_ids
+        new_feats["embeddings"] = torch.tensor(np.array(new_embs))
+        torch.save(new_feats, os.path.join(src, fold, "test_user_embeddings.pt"))
 
 if __name__ == "__main__":
     type_plot = "line"
@@ -186,4 +206,7 @@ if __name__ == "__main__":
             ld.append(json.load(f))
 
     plot_n_distributions(ld=ld, political_leanings=xlabels, legend=legend, dst=dst, width=.8)
+
+
+
 

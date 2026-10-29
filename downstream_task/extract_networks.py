@@ -4,10 +4,10 @@ from tqdm import tqdm
 
 from synthetic_dataset.network_creation import read_edg_file, write_edg_file
 
-mode = "rs"
+mode = "r"
 real_network_src = "original_networks/real_social_network.edg"
 synthetic_network_src = "original_networks/synthetic_social_network.edg"
-src_files_dir = f"percented_train_{mode}"
+src_files_dir = f"user_classification/percented_train_{mode}"
 
 
 real_edges = read_edg_file(real_network_src, type_ids=str)
@@ -16,7 +16,7 @@ if mode == "rs":
     network = real_edges + synthetic_edges
 else:
     network = real_edges
-for perc in tqdm([10, 20, 30, 40, 50, 60]):
+for perc in tqdm([1, 2, 4, 8, 16, 32, 64]):
     for fold in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
         train_ids = set(pd.read_csv(os.path.join(src_files_dir, f"{perc}_perc", "cross_validation", f"fold_{fold}", "train_ids.tsv"), sep="\t")["account_id"].tolist())
         test_ids = set(pd.read_csv(os.path.join(src_files_dir, f"{perc}_perc", "cross_validation", f"fold_{fold}", "test_ids.tsv"), sep="\t")["account_id"].tolist())
