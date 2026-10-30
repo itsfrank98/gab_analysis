@@ -9,6 +9,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import yaml
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, Side
 from datasets import Dataset
 from sklearn.metrics import accuracy_score, classification_report, precision_recall_fscore_support, mean_absolute_error, root_mean_squared_error
 from sklearn.model_selection import StratifiedKFold, train_test_split
@@ -27,7 +29,6 @@ parser.add_argument("--config_fname", type=str, required=True)
 args = parser.parse_args()
 
 PARAMETERS_PATH = args.config_fname
-print(f"PARAMETERS: {PARAMETERS_PATH}")
 with open(PARAMETERS_PATH, "r") as _f:
     _config = yaml.safe_load(_f)
 
@@ -36,12 +37,13 @@ _columns = _config["columns"]
 _training = _config["training"]
 
 MODEL_NAME = _paths["model_name"]
+PERC = _paths["perc"]
 REAL_DATA_PATH = _paths["real_data_path"]
 SYNTHETIC_DATA_PATH = _paths["synthetic_data_path"]
-OUTPUT_DIR = _paths["output_dir_name"]
+OUTPUT_DIR = _paths["output_dir_name"].format(PERC)
 REAL_LABELS_DF_NAME = _paths["real_labels_df_name"]
 SYNTHETIC_LABELS_DF_NAME = _paths["synthetic_labels_df_name"]
-PREDICT_OUTPUT_PATH = _paths["predict_output_filename"]
+PREDICT_OUTPUT_PATH = _paths["predict_output_filename"].format(PERC)
 
 TEXT_COLUMN = _columns["text_column"]
 POST_LABEL_COLUMN = _columns["post_label_column"]
@@ -281,6 +283,61 @@ class UserAttentionPoolingClassifier(nn.Module):
         return {"loss": loss, "logits": logits}
 
 
+def _save_classification_report_summaries(reports: dict, output_path: str, title: str, error_metrics: dict = None) -> None:
+    """Save one summary per sheet, with each metric in a mean ± std cell.
+
+    error_metrics maps sheet names to optional MAE/RMSE summaries. Values are
+    presentation strings (two decimals), matching the logged report.
+    """
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    side = Side(style="thin", color="000000")
+    thin_border = Border(left=side, right=side, top=side, bottom=side)
+
+    def format_metric(stats):
+        return f"{stats['mean']:.2f} ± {stats['std']:.2f}"
+
+    for sheet_name, summary in reports.items():
+        sheet = workbook.create_sheet(sheet_name)
+        sheet.append([title])
+        sheet.merge_cells("A1:E1")
+        sheet.append(["Class", "Precision", "Recall", "F1", "accuracy"])
+        for label, metrics in summary.items():
+            if label == "accuracy":
+                continue
+            sheet.append([label] + [
+                format_metric(metrics[metric])
+                for metric in ("precision", "recall", "f1-score")
+            ])
+
+        last_report_row = sheet.max_row
+        if "accuracy" in summary:
+            sheet.cell(3, 5, format_metric(summary["accuracy"]))
+            if last_report_row > 3:
+                sheet.merge_cells(start_row=3, start_column=5,
+                                  end_row=last_report_row, end_column=5)
+
+        for metric, stats in (error_metrics or {}).get(sheet_name, {}).items():
+            sheet.append([metric, format_metric(stats)])
+            sheet.merge_cells(start_row=sheet.max_row, start_column=2,
+                              end_row=sheet.max_row, end_column=5)
+
+        for row in sheet.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = thin_border
+                if cell.row <= 2 or cell.column == 1:
+                    cell.font = Font(bold=True)
+            sheet.row_dimensions[row[0].row].height = 22
+        for column in "ABCDE":
+            sheet.column_dimensions[column].width = 20
+        sheet.freeze_panes = "B3"
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    workbook.save(output_path)
+    logger.info("Saved classification report summaries to %s", output_path)
+
+
 def build_model(class_weights: torch.Tensor | None = None) -> UserAttentionPoolingClassifier:
     return UserAttentionPoolingClassifier(class_weights=class_weights)
 
@@ -305,13 +362,8 @@ def model_exists(path: str) -> bool:
     return os.path.isfile(os.path.join(path, "model_state_dict.pt"))
 
 
-def load_trainer(
-    model_path: str,
-    data_collator: UserBagCollator,
-    training_args: TrainingArguments | None = None,
-    train_dataset: Dataset | None = None,
-    eval_dataset: Dataset | None = None,
-) -> Trainer:
+def load_trainer(model_path: str, data_collator: UserBagCollator, training_args: TrainingArguments | None = None,
+                 train_dataset: Dataset | None = None, eval_dataset: Dataset | None = None,) -> Trainer:
     logger.info("Loading fine-tuned model from %s", model_path)
     state_dict = torch.load(os.path.join(model_path, "model_state_dict.pt"), map_location="cpu")
 
@@ -337,15 +389,15 @@ def load_trainer(
     )
 
 
-def _training_args(output_dir: str) -> TrainingArguments:
+def _training_args(dir: str) -> TrainingArguments:
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     return TrainingArguments(
-        output_dir=output_dir,
+        output_dir=dir,
         eval_strategy="epoch",
-        save_strategy="no",  # explicit save below - Trainer's own checkpointing for a non-PreTrainedModel falls back to undocumented behavior
+        save_strategy="epoch",  # explicit save below - Trainer's own checkpointing for a non-PreTrainedModel falls back to undocumented behavior
         group_by_length=True,
         length_column_name="length",
-        num_train_epochs=5,
+        num_train_epochs=4,
         per_device_train_batch_size=4,  # lower than a flat-sequence setup: cost now scales with batch_size x posts_per_bag x tokens_per_post
         per_device_eval_batch_size=8,
         learning_rate=2e-5,
@@ -465,34 +517,54 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
     """
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
     labels = bags_df[ACCOUNT_LABEL_COLUMN].to_numpy()
+    missing = bags_df[ACCOUNT_LABEL_COLUMN].isna()
+
+    if missing.any():
+        raise ValueError(
+            f"{missing.sum()} accounts have missing {ACCOUNT_LABEL_COLUMN!r}. "
+            f"Example account IDs: "
+            f"{bags_df.loc[missing, 'account_id'].head(20).tolist()}. "
+            f"Mode: {MODE}; label files: "
+            f"{REAL_LABELS_DF_NAME}, {SYNTHETIC_LABELS_DF_NAME}"
+        )
 
     fold_metrics = []
     fold_reports = []
     fold_binary_reports = []
+    maes = []
+    rmses = []
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(bags_df, labels), start=1):
         logger.info("Cross-validation fold %d/%d", fold, n_folds)
         fold_output_dir = os.path.join(OUTPUT_DIR, "cross_validation", f"fold_{fold}")
+        fold_model_dir = os.path.join(OUTPUT_DIR, "models", f"fold_{fold}")
+        os.makedirs(fold_model_dir, exist_ok=True)
         logger.info(f"FOLD OUTPUT DIR {fold_output_dir}")
         if os.path.exists(os.path.join(fold_output_dir, "train_ids.tsv")) and os.path.exists(os.path.join(fold_output_dir, "test_ids.tsv")):
             print("\nIDS EXIST")
             train_ids = pd.read_csv(os.path.join(fold_output_dir, "train_ids.tsv"), sep="\t")
             test_ids = pd.read_csv(os.path.join(fold_output_dir, "test_ids.tsv"), sep="\t")
-            # train_df = pd.read_csv(os.path.join(fold_output_dir, "train.tsv"), sep="\t")
-            # zero = train_df[train_df["label"] == 0]["account_id"].tolist()
-            # one = train_df[train_df["label"] == 1]["account_id"].tolist()
-            # two = train_df[train_df["label"] == 2]["account_id"].tolist()
-            # three = train_df[train_df["label"] == 3]["account_id"].tolist()
-            # four = train_df[train_df["label"] == 4]["account_id"].tolist()
-            # five = train_df[train_df["label"] == 5]["account_id"].tolist()
-            # train_ids = zero[:4] + one[:16] + two[:21] + three[:27] + four[:18] + five[:12]
-            train_ids = train_ids["account_id"].tolist()
+
+            train_ids = train_ids["account_id"]
             test_ids = test_ids["account_id"].tolist()
+            bag_ids = bags_df["account_id"]
+
+            missing_ids = train_ids[~train_ids.isin(bag_ids)].drop_duplicates()
+
+            logger.info(f"ID types: {train_ids.dtype, bag_ids.dtype}")
+            logger.info(f"Requested rows: {len(train_ids)}")
+            logger.info(f"Requested unique IDs: {train_ids.nunique()}")
+            logger.info(f"IDs missing from bags: {len(missing_ids)}")
+            logger.info(f"Missing examples: {missing_ids.head(20).tolist()}")
+
+            train_df = bags_df[bag_ids.isin(train_ids)]
+            print("Selected training rows:", len(train_df))
+
             train_df = bags_df[bags_df["account_id"].isin(train_ids)]
             test_df = bags_df[bags_df["account_id"].isin(test_ids)]
             logger.info(bags_df["account_id"].dtype)
             logger.info(f"TRAIN DATASET SIZE: {len(train_df)}")
-            logger.info(f"TEST IDS: {len(test_ids)}")
+            logger.info(f"TRAIN IDS: {len(train_ids)}")
             logger.info(f"TEST df: {len(test_df)}")
         else:
             os.makedirs(fold_output_dir, exist_ok=True)
@@ -507,20 +579,22 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
 
         class_weights = _balanced_class_weights(train_df[ACCOUNT_LABEL_COLUMN].to_numpy())
 
-        if model_exists(fold_output_dir):
+        if model_exists(fold_model_dir):
             logger.info("Fold %d model exists, loading it instead of training", fold)
             trainer = load_trainer(
-                fold_output_dir,
+                fold_model_dir,
                 data_collator,
-                training_args=_training_args(fold_output_dir),
+                training_args=_training_args(fold_model_dir),
                 train_dataset=train_dataset,
                 eval_dataset=val_dataset,
             )
         else:
+            logger.info("Training fold %d model from scratch", fold)
+            logger.info(fold_model_dir)
             model = build_model(class_weights=class_weights)
             trainer = Trainer(
                 model=model,
-                args=_training_args(fold_output_dir),
+                args=_training_args(fold_model_dir),
                 train_dataset=train_dataset,
                 eval_dataset=val_dataset,
                 data_collator=data_collator,
@@ -539,16 +613,18 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
         # extract_user_embeddings/save run a plain (non-DDP) forward pass - restrict to
         # rank 0 to avoid every rank redoing the same inference and racing on the same files
         if trainer.is_world_process_zero():
-            val_preds = np.argmax(predictions.predictions, axis=-1)
-            report = classification_report(predictions.label_ids, val_preds, labels=np.arange(NUM_LABELS), output_dict=True, zero_division=0)
+            preds = np.argmax(predictions.predictions, axis=-1)
+            report = classification_report(predictions.label_ids, preds, labels=np.arange(NUM_LABELS), output_dict=True, zero_division=0)
             logger.info(
                 "Fold %d classification report:\n%s",
                 fold,
                 report,
             )
             fold_reports.append(report)
+            maes.append(mean_absolute_error(predictions.label_ids, preds))
+            rmses.append(root_mean_squared_error(predictions.label_ids, preds))
 
-            binary_preds = np.array([0 if p < 3 else 1 for p in val_preds])
+            binary_preds = np.array([0 if p < 3 else 1 for p in preds])
             binary_true_values = np.array([0 if p < 3 else 1 for p in predictions.label_ids])
             binary_report = classification_report(binary_true_values, binary_preds, labels=np.array([0, 1]), output_dict=True, zero_division=0)
 
@@ -574,9 +650,11 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
 
     summary = _average_fold_metrics(fold_metrics)
     logger.info("Cross-validation summary over %d folds: %s", n_folds, summary)
+    reports_to_export = {}
 
     if fold_reports:  # only rank 0 collects these (see is_world_process_zero() above)
         report_summary = _average_classification_reports(fold_reports)
+        reports_to_export["Multiclass"] = report_summary
         logger.info(
             "Cross-validation mean classification report over %d folds:\n%s",
             n_folds,
@@ -585,10 +663,26 @@ def cross_validate(bags_df: pd.DataFrame, tokenizer, data_collator: UserBagColla
 
     if fold_binary_reports:  # only rank 0 collects these (see is_world_process_zero() above)
         binary_report_summary = _average_classification_reports(fold_binary_reports)
+        reports_to_export["Binary"] = binary_report_summary
         logger.info(
             "Cross-validation mean classification report over %d folds:\n%s",
             n_folds,
             _format_classification_report_summary(binary_report_summary),
+        )
+
+    logger.info(f"MAE: {np.array(maes).mean()} ± {np.array(maes).std()}")
+    logger.info(f"RMSE: {np.array(rmses).mean()} ± {np.array(rmses).std()}")
+
+    if reports_to_export:
+        training_data = {"r": "REAL", "s": "SYNTHETIC", "rs": "REAL + SYNTHETIC"}.get(MODE, MODE)
+        _save_classification_report_summaries(
+            reports_to_export,
+            os.path.join(OUTPUT_DIR, f"classification_report_summary_{MODE}.xlsx"),
+            title=f"TRAIN {training_data} ({n_folds} folds)",
+            error_metrics={"Multiclass": {
+                "MAE": {"mean": float(np.mean(maes)), "std": float(np.std(maes))},
+                "RMSE": {"mean": float(np.mean(rmses)), "std": float(np.std(rmses))},
+            }},
         )
 
     return fold_metrics
@@ -678,12 +772,14 @@ def main() -> None:
         data_df = pd.concat([real_posts_df, synthetic_posts_df])
         if "Unnamed: 0" in data_df.columns:
             data_df = data_df.drop(columns="Unnamed: 0")
+
         logger.info("REAL DATASET SIZE {}".format(len(real_posts_df)))
         logger.info("SYNTHETIC DATASET SIZE {}".format(len(synthetic_posts_df)))
         labels_df = pd.concat([real_labels_df, synthetic_labels_df])
 
-    if is_main_process():
-        report_token_lengths(data_df.dropna(subset=[TEXT_COLUMN]), tokenizer)
+    # if is_main_process():
+    #     report_token_lengths(data_df.dropna(subset=[TEXT_COLUMN]), tokenizer)
+
 
     bags_df = load_user_bags(data_df, labels_df=labels_df)
 
